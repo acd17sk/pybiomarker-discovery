@@ -8,13 +8,13 @@ from biomarkers.models.voice.acoustic_encoder import (
     MelSpectrogramEncoder,
     MFCCEncoder
 )
-# from biomarkers.models.voice.prosody_analyzer import (
-#     ProsodyAnalyzer,
-#     F0Extractor,
-#     RhythmAnalyzer,
-#     IntensityAnalyzer,
-#     SpectralTiltAnalyzer
-# )
+from biomarkers.models.voice.prosody_analyzer import (
+    ProsodyAnalyzer,
+    F0Extractor,
+    RhythmAnalyzer,
+    # IntensityAnalyzer,
+    # SpectralTiltAnalyzer
+)
 
 __all__ = [
     'VoiceBiomarkerModel',
@@ -23,9 +23,9 @@ __all__ = [
     'WaveformEncoder',
     'MelSpectrogramEncoder',
     'MFCCEncoder',
-    # 'ProsodyAnalyzer',
-    # 'F0Extractor',
-    # 'RhythmAnalyzer',
+    'ProsodyAnalyzer',
+    'F0Extractor',
+    'RhythmAnalyzer',
     # 'IntensityAnalyzer',
     # 'SpectralTiltAnalyzer'
 ]

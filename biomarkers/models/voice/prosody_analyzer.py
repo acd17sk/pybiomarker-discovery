@@ -24,8 +24,8 @@ class ProsodyAnalyzer(nn.Module):
         # Sub-analyzers
         self.f0_extractor = F0Extractor(input_dim, hidden_dim // 2)
         self.rhythm_analyzer = RhythmAnalyzer(input_dim, hidden_dim // 2)
-        self.intensity_analyzer = IntensityAnalyzer(input_dim, hidden_dim // 2)
-        self.spectral_tilt = SpectralTiltAnalyzer(input_dim, hidden_dim // 2)
+        # self.intensity_analyzer = IntensityAnalyzer(input_dim, hidden_dim // 2)
+        # self.spectral_tilt = SpectralTiltAnalyzer(input_dim, hidden_dim // 2)
         
         # Feature fusion
         fusion_input_dim = hidden_dim * 2  # 4 analyzers * hidden_dim/2
@@ -165,3 +165,28 @@ class RhythmAnalyzer(nn.Module):
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 4)  # dysrhythmia_score, irregularity, hesitation, repetition
+        )
+        
+        self.output_proj = nn.Linear(128 + 8 + 4, output_dim)
+    
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Analyze rhythm patterns"""
+        rhythm_features = self.rhythm_net(features)
+        
+        # Compute rhythm metrics
+        metrics = self.rhythm_metrics(rhythm_features)
+        
+        # Detect dysrhythmia
+        dysrhythmia_scores = self.dysrhythmia(rhythm_features)
+        dysrhythmia_scores = torch.sigmoid(dysrhythmia_scores)
+        
+        # Combine features
+        combined = torch.cat([
+            rhythm_features,
+            metrics,
+            dysrhythmia_scores
+        ], dim=-1)
+        
+        return self.output_proj(combined)[:, :features.shape[-1]//4]
