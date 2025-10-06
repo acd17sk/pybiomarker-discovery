@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  biomarker-training:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../data:/app/data
+      - ../checkpoints:/app/checkpoints
+      - ../logs:/app/logs
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - WANDB_API_KEY=${WANDB_API_KEY}
+    runtime: nvidia
+    command: python scripts/train.py --config configs/experiments/parkinson_detection.yaml
+    
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../:/app
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    runtime: nvidia
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+    
+  tensorboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "6006:6006"
+    volumes:
+      - ../logs:/app/logs
+    command: tensorboard --logdir=/app/logs --host=0.0.0.0

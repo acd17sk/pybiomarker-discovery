@@ -1,0 +1,60 @@
+# Parkinson's Disease Detection Experiment
+
+# Inherit from default
+defaults:
+  - default
+
+model:
+  num_diseases: 3  # healthy, early PD, advanced PD
+  modality_dims:
+    voice: 512
+    movement: 256
+  
+  # Parkinson's specific architecture
+  voice_model:
+    use_tremor_detector: true
+    use_prosody_analyzer: true
+    tremor_frequency_range: [3, 7]  # Hz
+    
+  movement_model:
+    use_gait_analyzer: true
+    use_bradykinesia_detector: true
+    use_freezing_detector: true
+
+data:
+  data_dir: "./data/parkinsons"
+  modalities: ["voice", "movement"]
+  target_diseases:
+    - "healthy"
+    - "early_pd"
+    - "advanced_pd"
+  
+  # Parkinson's specific preprocessing
+  transforms:
+    voice:
+      extract_formants: true
+      extract_jitter: true
+      extract_shimmer: true
+    movement:
+      extract_stride_length: true
+      extract_cadence: true
+      extract_freezing_episodes: true
+
+training:
+  num_epochs: 150
+  learning_rate: 5e-5
+  
+  # Add Parkinson's specific losses
+  tremor_detection_weight: 0.2
+  gait_consistency_weight: 0.15
+
+evaluation:
+  clinical_metrics: true
+  updrs_correlation: true  # Correlate with UPDRS scores
+  
+  # Parkinson's specific metrics
+  metrics:
+    - "tremor_amplitude"
+    - "bradykinesia_score"
+    - "gait_velocity"
+    - "freezing_of_gait_episodes"
