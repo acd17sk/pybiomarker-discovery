@@ -35,7 +35,6 @@ logs/
 *.ipynb_checkpoints
 
 # Data
-data/
 *.csv
 *.wav
 *.mp4
