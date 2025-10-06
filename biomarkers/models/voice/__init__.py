@@ -12,8 +12,10 @@ from biomarkers.models.voice.prosody_analyzer import (
     ProsodyAnalyzer,
     F0Extractor,
     RhythmAnalyzer,
-    # IntensityAnalyzer,
-    # SpectralTiltAnalyzer
+    IntensityAnalyzer,
+    SpectralTiltAnalyzer,
+    CepstralAnalyzer,
+    ArticulationAnalyzer
 )
 
 __all__ = [
@@ -26,6 +28,8 @@ __all__ = [
     'ProsodyAnalyzer',
     'F0Extractor',
     'RhythmAnalyzer',
-    # 'IntensityAnalyzer',
-    # 'SpectralTiltAnalyzer'
+    'IntensityAnalyzer',
+    'SpectralTiltAnalyzer',
+    'CepstralAnalyzer',
+    'ArticulationAnalyzer'
 ]
