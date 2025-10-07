@@ -43,6 +43,31 @@ from biomarkers.models.movement.tremor_detector import (
     ParkinsonianTremorAnalyzer
 )
 
+# Vision models
+from biomarkers.models.vision.visual_biomarker import VisualBiomarkerModel
+from biomarkers.models.vision.face_analyzer import (
+    FaceAnalyzer,
+    FacialExpressionAnalyzer,
+    FacialAsymmetryDetector,
+    MicroExpressionDetector,
+    BlinkAnalyzer,
+    FacialMaskDetector
+)
+from biomarkers.models.vision.eye_tracker import (
+    EyeTracker,
+    GazeEstimator,
+    PupilAnalyzer,
+    SaccadeDetector,
+    SmoothPursuitAnalyzer,
+    FixationAnalyzer,
+    VergenceAnalyzer
+)
+from biomarkers.models.vision.skin_analyzer import (
+    SkinColorAnalyzer,
+    SkinLesionDetector
+)
+
+
 # Fusion models
 from biomarkers.models.fusion.multimodal_fusion import (
     MultiModalBiomarkerFusion,
@@ -91,6 +116,24 @@ __all__ = [
     'TremorCharacterizer',
     'EssentialTremorAnalyzer',
     'ParkinsonianTremorAnalyzer',
+    
+    # Vision models
+    'VisualBiomarkerModel',
+    'FaceAnalyzer',
+    'FacialExpressionAnalyzer',
+    'FacialAsymmetryDetector',
+    'MicroExpressionDetector',
+    'BlinkAnalyzer',
+    'FacialMaskDetector',
+    'EyeTracker',
+    'GazeEstimator',
+    'PupilAnalyzer',
+    'SaccadeDetector',
+    'SmoothPursuitAnalyzer',
+    'FixationAnalyzer',
+    'VergenceAnalyzer',
+    'SkinColorAnalyzer',
+    'SkinLesionDetector',
     
     # Fusion models
     'MultiModalBiomarkerFusion',
