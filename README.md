@@ -29,7 +29,6 @@ biomarker-discovery/
 │   │   └── preprocessing.py     # Preprocessing pipelines
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── base_model.py        # BaseModel class
 │   │   ├── voice/
 │   │   │   ├── __init__.py
 │   │   │   ├── acoustic_encoder.py
