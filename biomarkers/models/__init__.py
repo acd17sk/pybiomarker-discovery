@@ -67,12 +67,52 @@ from biomarkers.models.vision.skin_analyzer import (
     SkinLesionDetector
 )
 
+from biomarkers.models.text.text_biomarker import TextBiomarkerModel
+from biomarkers.models.text.linguistic_analyzer import (
+    LinguisticAnalyzer,
+    LexicalDiversityAnalyzer,
+    SyntacticComplexityAnalyzer,
+    SemanticCoherenceAnalyzer,
+    DiscourseStructureAnalyzer,
+    CognitiveLoadAnalyzer,
+    LinguisticDeclineAnalyzer,
+    TemporalAnalyzer
+)
 
 # Fusion models
-from biomarkers.models.fusion.multimodal_fusion import (
-    MultiModalBiomarkerFusion,
-    CrossModalAttention
+from biomarkers.models.fusion.multimodal_fusion import MultiModalBiomarkerFusion
+from biomarkers.models.fusion.fusion_components import (
+    CrossModalAttention,
+    ModalityEncoder,
+    TemporalFusion,
+    HierarchicalFusion
 )
+from biomarkers.models.fusion.uncertainty_quantification import (
+    EvidentialUncertainty,
+    EnsembleUncertainty,
+    DropoutUncertainty
+)
+from biomarkers.models.fusion.attention_fusion import (
+    AttentionFusion,
+    MultiHeadCrossModalAttention,
+    ModalitySpecificAttention,
+    TemporalCrossAttention,
+    GatedAttentionFusion,
+    PerceiverFusion,
+    TransformerFusion
+)
+from biomarkers.models.fusion.graph_fusion import (
+    GraphFusion,
+    BiomarkerGraphNetwork,
+    ModalityGraphAttention,
+    DynamicGraphFusion,
+    HeterogeneousGraphFusion,
+    TemporalGraphFusion,
+    AdaptiveGraphStructure
+)
+    
+
+
 
 # Discovery models
 from biomarkers.models.discovery.feature_discovery import (
@@ -134,10 +174,41 @@ __all__ = [
     'VergenceAnalyzer',
     'SkinColorAnalyzer',
     'SkinLesionDetector',
+
+    # Text models
+    'TextBiomarkerModel',
+    'LinguisticAnalyzer',
+    'LexicalDiversityAnalyzer',
+    'SyntacticComplexityAnalyzer',
+    'SemanticCoherenceAnalyzer',
+    'DiscourseStructureAnalyzer',
+    'CognitiveLoadAnalyzer',
+    'LinguisticDeclineAnalyzer',
+    'TemporalAnalyzer',
     
     # Fusion models
     'MultiModalBiomarkerFusion',
     'CrossModalAttention',
+    'ModalityEncoder',
+    'TemporalFusion',
+    'HierarchicalFusion',
+    'EvidentialUncertainty',
+    'EnsembleUncertainty',
+    'DropoutUncertainty',
+    'AttentionFusion',
+    'MultiHeadCrossModalAttention',
+    'ModalitySpecificAttention',
+    'TemporalCrossAttention',
+    'GatedAttentionFusion',
+    'PerceiverFusion',
+    'TransformerFusion',
+    'GraphFusion',
+    'BiomarkerGraphNetwork',
+    'ModalityGraphAttention',
+    'DynamicGraphFusion',
+    'HeterogeneousGraphFusion',
+    'TemporalGraphFusion',
+    'AdaptiveGraphStructure',
     
     # Discovery models
     'AutomatedFeatureDiscovery',
