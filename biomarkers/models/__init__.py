@@ -4,6 +4,12 @@ from biomarkers.core.base import BiomarkerModel
 
 # Voice models
 from biomarkers.models.voice.speech_biomarker import VoiceBiomarkerModel
+from biomarkers.models.voice.voice_disease_analyzers import (
+    ParkinsonSpeechAnalyzer,
+    DepressionSpeechAnalyzer,
+    CognitiveDeclineSpeechAnalyzer,
+    DysarthriaAnalyzer
+)
 from biomarkers.models.voice.acoustic_encoder import (
     AcousticEncoder,
     SpectralEncoder,
@@ -15,6 +21,7 @@ from biomarkers.models.voice.acoustic_encoder import (
 )
 from biomarkers.models.voice.prosody_analyzer import (
     ProsodyAnalyzer,
+    RawAudioProsodyExtractor,
     F0Extractor,
     RhythmAnalyzer,
     IntensityAnalyzer,
@@ -126,6 +133,10 @@ __all__ = [
     
     # Voice models
     'VoiceBiomarkerModel',
+    'ParkinsonSpeechAnalyzer',
+    'DepressionSpeechAnalyzer',
+    'CognitiveDeclineSpeechAnalyzer',
+    'DysarthriaAnalyzer',
     'AcousticEncoder',
     'SpectralEncoder',
     'WaveformEncoder',
@@ -134,6 +145,7 @@ __all__ = [
     'SincConv1d',
     'ConformerEncoder',
     'ProsodyAnalyzer',
+    'RawAudioProsodyExtractor',
     'F0Extractor',
     'RhythmAnalyzer',
     'IntensityAnalyzer',
