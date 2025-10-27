@@ -124,7 +124,30 @@ from biomarkers.models.fusion.graph_fusion import (
 # Discovery models
 from biomarkers.models.discovery.feature_discovery import (
     AutomatedFeatureDiscovery,
-    NeuralArchitectureSearch
+    AttentionBasedDiscovery,
+    BiomarkerCombinationFinder,
+    FeatureInteractionNetwork,
+    AdaptiveFeatureSelector,
+    CrossModalFeatureDiscovery
+)
+from biomarkers.models.discovery.neural_architecture_search import (
+    NeuralArchitectureSearch,
+    DARTSSearchSpace,
+    ENASController,
+    BiomarkerNASController,
+    ArchitectureEvaluator,
+    SuperNet,
+    DifferentiableArchitecture
+)
+from biomarkers.models.discovery.contrastive_learner import (
+    ContrastiveBiomarkerLearner,
+    SimCLRBiomarker,
+    MoCoBiomarker,
+    SupConBiomarker,
+    PrototypicalBiomarker,
+    TripletBiomarker,
+    ContrastiveAugmentation,
+    HealthyRiskContrastive
 )
 
 __all__ = [
@@ -224,5 +247,24 @@ __all__ = [
     
     # Discovery models
     'AutomatedFeatureDiscovery',
-    'NeuralArchitectureSearch'
+    'AttentionBasedDiscovery',
+    'BiomarkerCombinationFinder',
+    'FeatureInteractionNetwork',
+    'AdaptiveFeatureSelector',
+    'CrossModalFeatureDiscovery',
+    'NeuralArchitectureSearch',
+    'DARTSSearchSpace',
+    'ENASController',
+    'BiomarkerNASController',
+    'ArchitectureEvaluator',
+    'SuperNet',
+    'DifferentiableArchitecture',
+    'ContrastiveBiomarkerLearner',
+    'SimCLRBiomarker',
+    'MoCoBiomarker',
+    'SupConBiomarker',
+    'PrototypicalBiomarker',
+    'TripletBiomarker',
+    'ContrastiveAugmentation',
+    'HealthyRiskContrastive'
 ]

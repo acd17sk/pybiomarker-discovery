@@ -575,7 +575,8 @@ class BiomarkerNASController(nn.Module):
     def update_best_architecture(self, performance: float):
         """Update best architecture based on performance"""
         if performance > self.best_performance:
-            self.best_performance = performance
+            # self.best_performance = 
+            self.best_performance.fill_(performance)
             self.best_arch = F.softmax(self.arch_params, dim=-1).detach()
     
     def get_best_architecture(self) -> Dict[str, Any]:
@@ -683,7 +684,13 @@ class SuperNet(nn.Module):
         if op_name == 'skip_connect':
             return Identity()
         elif 'conv' in op_name:
-            kernel_size = int(op_name.split('_')[1][0])
+            # kernel_size = int(op_name.split('_')[1][0])
+            import re
+            match = re.search(r'_(\d+)x\d+', op_name) # Find the first digit after '_' and before 'x'
+            if match:
+                kernel_size = int(match.group(1))
+            else:
+                kernel_size = 3 # Default kernel size if pattern doesn't match
             return nn.Sequential(
                 nn.Conv1d(hidden_dim, hidden_dim, kernel_size, padding=kernel_size // 2),
                 nn.BatchNorm1d(hidden_dim),

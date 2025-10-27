@@ -551,6 +551,9 @@ class TestIntegration:
         # Create optimizers
         weight_params = [p for p in nas.parameters() 
                         if p not in nas.search_space.arch_parameters()]
+        # arch_param_ids = {id(p) for p in nas.search_space.arch_parameters()}
+        # weight_params = [p for p in nas.parameters() if id(p) not in arch_param_ids]
+
         weight_optimizer = optim.Adam(weight_params, lr=0.001)
         
         arch_params = nas.search_space.arch_parameters()

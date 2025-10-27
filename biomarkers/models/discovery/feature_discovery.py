@@ -594,7 +594,9 @@ class AdaptiveFeatureSelector(nn.Module):
         """Anneal temperature for Gumbel-Softmax"""
         min_temp = 0.5
         max_temp = 1.0
-        self.temperature = max_temp - (max_temp - min_temp) * (step / total_steps)
+        # self.temperature = max_temp - (max_temp - min_temp) * (step / total_steps)
+        new_temp = max_temp - (max_temp - min_temp) * (step / total_steps)
+        self.temperature.fill_(new_temp)
 
 
 class BiomarkerCombinationFinder(nn.Module):
