@@ -31,7 +31,7 @@ class LinguisticAnalyzer(nn.Module):
         self.temporal_analyzer = TemporalAnalyzer(embedding_dim, hidden_dim // 2)
         
         # Feature fusion
-        fusion_dim = hidden_dim * 3 + hidden_dim // 2  # 7 components
+        fusion_dim = hidden_dim * 3 + hidden_dim // 2
         
         self.feature_fusion = nn.Sequential(
             nn.Linear(fusion_dim, hidden_dim * 2),
@@ -47,7 +47,7 @@ class LinguisticAnalyzer(nn.Module):
         self.pattern_classifier = nn.Sequential(
             nn.Linear(hidden_dim // 2, 128),
             nn.ReLU(),
-            nn.Linear(128, 8)  # Normal, MCI, Alzheimer's, Parkinson's, Depression, Aphasia, Dysexecutive, TBI
+            nn.Linear(128, 8)
         )
     
     def forward(self, 
@@ -105,11 +105,11 @@ class LexicalDiversityAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Vocabulary encoder
+        # Vocabulary encoder - FIXED: Use LayerNorm instead of BatchNorm1d
         self.vocab_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),  # Changed from BatchNorm1d
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -129,7 +129,7 @@ class LexicalDiversityAnalyzer(nn.Module):
         self.richness_metrics = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 8)  # vocd, mtld, hdd, unique_lemmas, rare_words, academic_words, sophistication, diversity
+            nn.Linear(128, 8)
         )
         
         # Semantic diversity estimator
@@ -138,14 +138,14 @@ class LexicalDiversityAnalyzer(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 5)  # semantic_spread, topic_diversity, conceptual_range, abstractness, concreteness
+            nn.Linear(64, 5)
         )
         
         # Word frequency analyzer
         self.frequency_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 4)  # mean_frequency, frequency_range, high_freq_ratio, low_freq_ratio
+            nn.Linear(128, 4)
         )
         
         self.output_proj = nn.Linear(256, output_dim)
@@ -257,11 +257,11 @@ class SyntacticComplexityAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Syntactic encoder
+        # Syntactic encoder - FIXED: Use LayerNorm instead of BatchNorm1d
         self.syntactic_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),  # Changed from BatchNorm1d
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -271,42 +271,42 @@ class SyntacticComplexityAnalyzer(nn.Module):
         self.parse_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 7)  # tree_depth, avg_depth, branching_factor, max_branches, symmetry, balance, complexity
+            nn.Linear(128, 7)
         )
         
         # Dependency distance analyzer
         self.dependency_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # mean_distance, max_distance, total_distance, crossing_dependencies, long_distance_deps, dep_complexity
+            nn.Linear(128, 6)
         )
         
         # Subordination analyzer
         self.subordination_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 8)  # subordination_index, clause_density, embedded_clauses, relative_clauses, complement_clauses, adverbial_clauses, coordination, complex_np
+            nn.Linear(128, 8)
         )
         
-        # Yngve depth calculator (left-branching complexity)
+        # Yngve depth calculator
         self.yngve_calculator = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 3)  # mean_yngve, max_yngve, total_yngve
+            nn.Linear(128, 3)
         )
         
-        # Frazier score (nested structure complexity)
+        # Frazier score
         self.frazier_calculator = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 3)  # mean_frazier, max_frazier, total_frazier
+            nn.Linear(128, 3)
         )
         
         # Grammatical accuracy
         self.grammar_accuracy = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 5)  # subject_verb_agreement, tense_consistency, article_usage, preposition_accuracy, overall_accuracy
+            nn.Linear(128, 5)
         )
         
         self.output_proj = nn.Linear(256, output_dim)
@@ -324,7 +324,6 @@ class SyntacticComplexityAnalyzer(nn.Module):
         for batch_idx in range(batch_size):
             tree = parse_trees[batch_idx] if isinstance(parse_trees, list) else parse_trees
             
-            # Parse tree depth
             if tree:
                 depth = self._compute_tree_depth(tree)
                 avg_depth = self._compute_avg_depth(tree)
@@ -340,19 +339,16 @@ class SyntacticComplexityAnalyzer(nn.Module):
     
     def _compute_tree_depth(self, tree) -> int:
         """Compute maximum depth of parse tree"""
-        # Simplified - in practice, use proper tree traversal
         if isinstance(tree, str):
             return tree.count('(')
         return 0
     
     def _compute_avg_depth(self, tree) -> float:
         """Compute average depth across all nodes"""
-        # Simplified placeholder
         return self._compute_tree_depth(tree) / 2.0
     
     def _count_clauses(self, tree) -> int:
         """Count clauses in parse tree"""
-        # Simplified - look for clause markers (S, SBAR, etc.)
         if isinstance(tree, str):
             clause_markers = ['(S ', '(SBAR ', '(SBARQ ']
             return sum(tree.count(marker) for marker in clause_markers)
@@ -362,35 +358,20 @@ class SyntacticComplexityAnalyzer(nn.Module):
                 embeddings: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Analyze syntactic complexity"""
-        # Pool embeddings
         pooled = torch.mean(embeddings, dim=1)
-        
-        # Encode syntax
         syntactic_features = self.syntactic_encoder(pooled)
         
-        # Analyze parse tree
         parse_metrics = self.parse_analyzer(syntactic_features)
-        
-        # Dependency analysis
         dependency = self.dependency_analyzer(syntactic_features)
-        
-        # Subordination analysis
         subordination = self.subordination_analyzer(syntactic_features)
         subordination = torch.sigmoid(subordination)
         
-        # Yngve depth
         yngve = self.yngve_calculator(syntactic_features)
-        
-        # Frazier score
         frazier = self.frazier_calculator(syntactic_features)
-        
-        # Grammar accuracy
         grammar = self.grammar_accuracy(syntactic_features)
         grammar = torch.sigmoid(grammar)
         
-        # Compute parse features if available
         parse_features = self.compute_parse_features(text_metadata)
-        
         features = self.output_proj(syntactic_features)
         
         output = {
@@ -433,7 +414,8 @@ class SemanticCoherenceAnalyzer(nn.Module):
         self.coherence_attention = nn.MultiheadAttention(
             embed_dim=512,
             num_heads=8,
-            dropout=0.2
+            dropout=0.2,
+            batch_first=True  # FIXED: Added batch_first=True
         )
         
         # Topic consistency analyzer
@@ -442,34 +424,33 @@ class SemanticCoherenceAnalyzer(nn.Module):
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # topic_consistency, topic_drift, topic_switches, coherence_score, relevance, focus
+            nn.Linear(128, 6)
         )
         
         # Semantic similarity calculator
         self.similarity_calculator = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(256, 5)  # inter_sentence_sim, paragraph_coherence, global_coherence, semantic_flow, conceptual_continuity
+            nn.Linear(256, 5)
         )
         
         # Anaphora resolution quality
         self.anaphora_analyzer = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(256, 4)  # reference_clarity, pronoun_resolution, entity_tracking, referential_coherence
+            nn.Linear(256, 4)
         )
         
         self.output_proj = nn.Linear(512, output_dim)
     
     def compute_semantic_similarity(self, embeddings: torch.Tensor) -> torch.Tensor:
         """Compute pairwise semantic similarity between sentences"""
-        # Normalize embeddings
         normalized = F.normalize(embeddings, p=2, dim=-1)
-        
-        # Compute cosine similarity matrix
         similarity_matrix = torch.matmul(normalized, normalized.transpose(1, 2))
         
-        # Extract metrics
+        # Clamp to [0, 1] range as similarities should be non-negative
+        similarity_matrix = torch.clamp(similarity_matrix, 0.0, 1.0)
+        
         batch_size = embeddings.shape[0]
         metrics = []
         
@@ -477,20 +458,20 @@ class SemanticCoherenceAnalyzer(nn.Module):
             sim = similarity_matrix[b]
             seq_len = sim.shape[0]
             
-            # Adjacent sentence similarity
             if seq_len > 1:
                 adjacent_sim = torch.diagonal(sim, offset=1).mean()
-                
-                # Global coherence (mean of upper triangle)
                 mask = torch.triu(torch.ones_like(sim), diagonal=1)
                 global_coherence = (sim * mask).sum() / mask.sum()
-                
-                # Semantic flow (variance of adjacent similarities)
                 semantic_flow = 1.0 - torch.diagonal(sim, offset=1).std()
             else:
                 adjacent_sim = torch.tensor(1.0)
                 global_coherence = torch.tensor(1.0)
                 semantic_flow = torch.tensor(1.0)
+            
+            # Clamp all metrics to [0, 1]
+            adjacent_sim = torch.clamp(adjacent_sim, 0.0, 1.0)
+            global_coherence = torch.clamp(global_coherence, 0.0, 1.0)
+            semantic_flow = torch.clamp(semantic_flow, 0.0, 1.0)
             
             metrics.append([adjacent_sim, global_coherence, semantic_flow])
         
@@ -503,13 +484,14 @@ class SemanticCoherenceAnalyzer(nn.Module):
         # LSTM encoding for temporal semantics
         semantic_features, _ = self.semantic_encoder(embeddings)
         
-        # Self-attention for coherence
+        # Self-attention for coherence - batch_first=True ensures [batch, seq, seq]
         attended, attention_weights = self.coherence_attention(
-            semantic_features.transpose(0, 1),
-            semantic_features.transpose(0, 1),
-            semantic_features.transpose(0, 1)
+            semantic_features,
+            semantic_features,
+            semantic_features,
+            need_weights=True,
+            average_attn_weights=False  # Get per-head weights if needed
         )
-        attended = attended.transpose(0, 1)
         
         # Pool features
         pooled = torch.mean(attended, dim=1)
@@ -552,11 +534,11 @@ class DiscourseStructureAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Discourse encoder using GNN for discourse relations
+        # Discourse encoder using GNN for discourse relations - FIXED: Use LayerNorm
         self.discourse_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),  # Changed from BatchNorm1d
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -566,87 +548,82 @@ class DiscourseStructureAnalyzer(nn.Module):
         self.discourse_gat = nn.MultiheadAttention(
             embed_dim=256,
             num_heads=4,
-            dropout=0.2
+            dropout=0.2,
+            batch_first=True  # FIXED: Added batch_first=True
         )
         
         # Reference chain analyzer
         self.reference_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 7)  # chain_length, chain_completeness, referent_clarity, entity_density, chain_breaks, ambiguous_refs, clear_refs
+            nn.Linear(128, 7)
         )
         
         # Cohesion marker analyzer
         self.cohesion_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 8)  # connective_use, temporal_markers, causal_markers, additive_markers, contrastive_markers, elaboration_markers, cohesion_density, marker_variety
+            nn.Linear(128, 8)
         )
         
         # Narrative flow analyzer
         self.narrative_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 9)  # story_structure, temporal_sequence, causal_chain, goal_structure, narrative_completeness, plot_coherence, beginning_quality, middle_quality, end_quality
+            nn.Linear(128, 9)
         )
         
         # Information structure
         self.information_structure = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # given_new_ratio, theme_rheme, information_flow, focus_structure, topic_continuity, information_density
+            nn.Linear(128, 6)
         )
         
         self.output_proj = nn.Linear(256, output_dim)
     
     def build_discourse_graph(self, embeddings: torch.Tensor) -> torch.Tensor:
         """Build discourse relation graph"""
-        # Simplified discourse graph using attention
-        batch_size, seq_len, _ = embeddings.shape
-        
-        # Compute pairwise discourse relations
-        queries = embeddings
-        keys = embeddings
-        values = embeddings
-        
-        # Apply graph attention
+        # FIXED: Apply graph attention with batch_first=True
         graph_features, _ = self.discourse_gat(
-            queries.transpose(0, 1),
-            keys.transpose(0, 1),
-            values.transpose(0, 1)
+            embeddings,
+            embeddings,
+            embeddings
         )
         
-        return graph_features.transpose(0, 1)
+        return graph_features
     
     def forward(self,
                 embeddings: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Analyze discourse structure"""
-        # Pool embeddings for discourse encoding
+        # Get sequence features first
+        batch_size, seq_len, embed_dim = embeddings.shape
+        
+        # Pool to get discourse features - this is [batch, embed_dim]
         pooled = torch.mean(embeddings, dim=1)
         
-        # Encode discourse
-        discourse_features = self.discourse_encoder(pooled)
+        # Project to 256 dimensions
+        discourse_features = self.discourse_encoder(pooled)  # [batch, 256]
         
-        # Build discourse graph
-        # Note: In practice, expand pooled back to sequence for graph
-        expanded = discourse_features.unsqueeze(1).expand(-1, embeddings.shape[1], -1)
-        graph_features = self.build_discourse_graph(expanded)
-        graph_pooled = torch.mean(graph_features, dim=1)
+        # Build discourse graph - need to work on sequence level
+        # Project each position in sequence to 256 dimensions
+        sequence_projected = self.discourse_encoder(embeddings.view(-1, embed_dim))
+        sequence_projected = sequence_projected.view(batch_size, seq_len, 256)
         
-        # Reference chain analysis
+        # Now apply graph attention on the projected sequence
+        graph_features = self.build_discourse_graph(sequence_projected)  # [batch, seq_len, 256]
+        graph_pooled = torch.mean(graph_features, dim=1)  # [batch, 256]
+        
         reference = self.reference_analyzer(graph_pooled)
         reference = torch.sigmoid(reference)
         
-        # Cohesion analysis
         cohesion = self.cohesion_analyzer(graph_pooled)
         cohesion = torch.sigmoid(cohesion)
         
-        # Narrative flow
         narrative = self.narrative_analyzer(graph_pooled)
         narrative = torch.sigmoid(narrative)
         
-        # Information structure
         info_structure = self.information_structure(graph_pooled)
         info_structure = torch.sigmoid(info_structure)
         
@@ -672,49 +649,49 @@ class CognitiveLoadAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Cognitive load encoder
+        # Cognitive load encoder - FIXED: Use LayerNorm
         self.cognitive_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),  # Changed from BatchNorm1d
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
         )
         
-        # Filled pause detector (written equivalents: "um", "uh", "like", etc.)
+        # Filled pause detector
         self.filled_pause_detector = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 4)  # frequency, distribution, types, severity
+            nn.Linear(128, 4)
         )
         
         # Word-finding difficulty detector
         self.word_finding_detector = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 7)  # circumlocution, vague_words, approximations, substitutions, hesitations, restarts, incomplete_words
+            nn.Linear(128, 7)
         )
         
         # Repetition analyzer
         self.repetition_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # word_repetition, phrase_repetition, idea_repetition, perseveration, revision_rate, false_starts
+            nn.Linear(128, 6)
         )
         
         # Cognitive effort estimator
         self.effort_estimator = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 5)  # overall_effort, planning_difficulty, formulation_difficulty, monitoring_difficulty, executive_load
+            nn.Linear(128, 5)
         )
         
         # Self-correction analyzer
         self.correction_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 4)  # correction_rate, successful_corrections, monitoring_quality, error_awareness
+            nn.Linear(128, 4)
         )
         
         self.output_proj = nn.Linear(256, output_dim)
@@ -735,14 +712,10 @@ class CognitiveLoadAnalyzer(nn.Module):
             batch_tokens = tokens[batch_idx] if isinstance(tokens, list) else tokens
             text = ' '.join(batch_tokens).lower()
             
-            # Count filled pauses
             pause_count = sum(text.count(marker) for marker in filled_pause_markers)
             pause_ratio = pause_count / len(batch_tokens) if len(batch_tokens) > 0 else 0.0
             
-            # Detect ellipsis and trailing off
             ellipsis_count = text.count('...')
-            
-            # Detect hesitation patterns
             hesitation_pattern = len(re.findall(r'\b(well|so|actually|basically)\b', text))
             
             features.append([pause_count, pause_ratio, ellipsis_count, hesitation_pattern])
@@ -762,15 +735,12 @@ class CognitiveLoadAnalyzer(nn.Module):
         for batch_idx in range(batch_size):
             batch_tokens = tokens[batch_idx] if isinstance(tokens, list) else tokens
             
-            # Word repetition (immediate)
             immediate_reps = sum(1 for i in range(len(batch_tokens)-1) 
                                if batch_tokens[i] == batch_tokens[i+1])
             
-            # Phrase repetition (bigrams)
             bigrams = [' '.join(batch_tokens[i:i+2]) for i in range(len(batch_tokens)-1)]
             bigram_reps = len(bigrams) - len(set(bigrams))
             
-            # Overall repetition rate
             total_reps = immediate_reps + bigram_reps
             rep_ratio = total_reps / len(batch_tokens) if len(batch_tokens) > 0 else 0.0
             
@@ -782,33 +752,24 @@ class CognitiveLoadAnalyzer(nn.Module):
                 embeddings: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Analyze cognitive load markers"""
-        # Pool embeddings
         pooled = torch.mean(embeddings, dim=1)
-        
-        # Encode cognitive features
         cognitive_features = self.cognitive_encoder(pooled)
         
-        # Detect filled pauses
         filled_pauses = self.filled_pause_detector(cognitive_features)
         filled_pauses = torch.sigmoid(filled_pauses)
         
-        # Word-finding difficulty
         word_finding = self.word_finding_detector(cognitive_features)
         word_finding = torch.sigmoid(word_finding)
         
-        # Repetition analysis
         repetition = self.repetition_analyzer(cognitive_features)
         repetition = torch.sigmoid(repetition)
         
-        # Cognitive effort
         effort = self.effort_estimator(cognitive_features)
         effort = torch.sigmoid(effort)
         
-        # Self-correction
         correction = self.correction_analyzer(cognitive_features)
         correction = torch.sigmoid(correction)
         
-        # Compute statistical features if available
         pause_features = self.detect_filled_pauses(text_metadata)
         rep_features = self.detect_repetitions(text_metadata)
         
@@ -845,11 +806,11 @@ class LinguisticDeclineAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Decline marker encoder
+        # Decline marker encoder - FIXED: Use LayerNorm
         self.decline_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),  # Changed from BatchNorm1d
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -859,42 +820,42 @@ class LinguisticDeclineAnalyzer(nn.Module):
         self.grammar_simplification = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 8)  # reduced_clauses, simple_sentences, shorter_sentences, reduced_embedding, loss_of_subordination, telegraphic_speech, agrammatism, paragrammatism
+            nn.Linear(128, 8)
         )
         
         # Information content analyzer
         self.info_content_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 7)  # content_word_ratio, empty_speech, information_units, propositions_per_word, idea_density, semantic_content, meaningful_content
+            nn.Linear(128, 7)
         )
         
         # Pronoun overuse detector
         self.pronoun_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # pronoun_ratio, vague_pronouns, ambiguous_references, pronoun_density, noun_to_pronoun_ratio, referential_clarity
+            nn.Linear(128, 6)
         )
         
         # Semantic impoverishment detector
         self.semantic_impoverishment = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 7)  # semantic_diversity_loss, categorical_fluency, word_retrieval, paraphasias, semantic_errors, circumlocution, empty_words
+            nn.Linear(128, 7)
         )
         
         # Fragmentation analyzer
         self.fragmentation_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 5)  # incomplete_sentences, fragments, false_starts, abandoned_utterances, derailment
+            nn.Linear(128, 5)
         )
         
         # Disease-specific patterns
         self.disease_patterns = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # alzheimers_pattern, mci_pattern, parkinsons_pattern, frontotemporal_pattern, vascular_pattern, depression_pattern
+            nn.Linear(128, 6)
         )
         
         self.output_proj = nn.Linear(256, output_dim)
@@ -907,11 +868,8 @@ class LinguisticDeclineAnalyzer(nn.Module):
         pos_tags = text_metadata['pos_tags']
         batch_size = len(pos_tags) if isinstance(pos_tags, list) else 1
         
-        # Content word POS tags (nouns, verbs, adjectives, adverbs)
         content_tags = {'NN', 'NNS', 'NNP', 'NNPS', 'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ', 
                        'JJ', 'JJR', 'JJS', 'RB', 'RBR', 'RBS'}
-        
-        # Function words (pronouns, determiners, prepositions, conjunctions)
         function_tags = {'PRP', 'PRP', 'DT', 'IN', 'CC', 'WDT', 'WP', 'WP', 'WRB'}
         
         features = []
@@ -926,7 +884,6 @@ class LinguisticDeclineAnalyzer(nn.Module):
             content_ratio = content_count / total_count if total_count > 0 else 0.0
             function_ratio = function_count / total_count if total_count > 0 else 0.0
             
-            # Pronoun ratio specifically
             pronoun_count = sum(1 for tag in batch_tags if tag in {'PRP', 'PRP'})
             pronoun_ratio = pronoun_count / total_count if total_count > 0 else 0.0
             
@@ -938,37 +895,27 @@ class LinguisticDeclineAnalyzer(nn.Module):
                 embeddings: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Analyze linguistic decline markers"""
-        # Pool embeddings
         pooled = torch.mean(embeddings, dim=1)
-        
-        # Encode decline markers
         decline_features = self.decline_encoder(pooled)
         
-        # Grammar simplification
         grammar_simp = self.grammar_simplification(decline_features)
         grammar_simp = torch.sigmoid(grammar_simp)
         
-        # Information content
         info_content = self.info_content_analyzer(decline_features)
         info_content = torch.sigmoid(info_content)
         
-        # Pronoun analysis
         pronoun = self.pronoun_analyzer(decline_features)
         pronoun = torch.sigmoid(pronoun)
         
-        # Semantic impoverishment
         semantic_imp = self.semantic_impoverishment(decline_features)
         semantic_imp = torch.sigmoid(semantic_imp)
         
-        # Fragmentation
         fragmentation = self.fragmentation_analyzer(decline_features)
         fragmentation = torch.sigmoid(fragmentation)
         
-        # Disease patterns
         disease_patterns = self.disease_patterns(decline_features)
         disease_patterns = F.softmax(disease_patterns, dim=-1)
         
-        # Compute statistical features if available
         content_features = self.compute_content_ratio(text_metadata)
         
         features = self.output_proj(decline_features)
@@ -1003,11 +950,11 @@ class TemporalAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Temporal encoder
+        # Temporal encoder - FIXED: Use LayerNorm
         self.temporal_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),  # Changed from BatchNorm1d
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -1017,28 +964,28 @@ class TemporalAnalyzer(nn.Module):
         self.speed_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 6)  # words_per_minute, characters_per_minute, pauses_per_minute, typing_rhythm, speed_variability, fluency
+            nn.Linear(128, 6)
         )
         
         # Revision pattern analyzer
         self.revision_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 8)  # revision_count, deletion_rate, insertion_rate, substitution_rate, revision_latency, monitoring_quality, planning_quality, revision_type
+            nn.Linear(128, 8)
         )
         
         # Pause analysis
         self.pause_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 7)  # pause_frequency, pause_duration, pause_location, pre_word_pauses, mid_word_pauses, between_sentence_pauses, planning_pauses
+            nn.Linear(128, 7)
         )
         
         # Temporal dynamics
         self.dynamics_analyzer = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, 5)  # acceleration, deceleration, burst_writing, continuous_flow, temporal_variability
+            nn.Linear(128, 5)
         )
         
         self.output_proj = nn.Linear(256, output_dim)
@@ -1063,19 +1010,15 @@ class TemporalAnalyzer(nn.Module):
                 features.append([0.0, 0.0, 0.0, 0.0])
                 continue
             
-            # Inter-keystroke intervals
             intervals = np.diff(batch_timestamps)
             
-            # Average writing speed
             total_time = batch_timestamps[-1] - batch_timestamps[0]
             wpm = (len(batch_tokens) / total_time) * 60 if total_time > 0 else 0.0
             
-            # Pause detection (intervals > 2 seconds)
             pause_threshold = 2.0
             pauses = np.sum(intervals > pause_threshold)
             pause_ratio = pauses / len(intervals) if len(intervals) > 0 else 0.0
             
-            # Speed variability
             speed_var = np.std(intervals) if len(intervals) > 0 else 0.0
             
             features.append([wpm, pause_ratio, pauses, speed_var])
@@ -1086,28 +1029,20 @@ class TemporalAnalyzer(nn.Module):
                 embeddings: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Analyze temporal features"""
-        # Pool embeddings
         pooled = torch.mean(embeddings, dim=1)
-        
-        # Encode temporal features
         temporal_features = self.temporal_encoder(pooled)
         
-        # Speed analysis
         speed = self.speed_analyzer(temporal_features)
         
-        # Revision analysis
         revision = self.revision_analyzer(temporal_features)
         revision = torch.sigmoid(revision)
         
-        # Pause analysis
         pauses = self.pause_analyzer(temporal_features)
         pauses = torch.sigmoid(pauses)
         
-        # Dynamics analysis
         dynamics = self.dynamics_analyzer(temporal_features)
         dynamics = torch.sigmoid(dynamics)
         
-        # Compute timing features if available
         timing_features = self.compute_timing_features(text_metadata)
         
         features = self.output_proj(temporal_features)
