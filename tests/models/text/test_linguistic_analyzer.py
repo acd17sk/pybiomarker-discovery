@@ -297,7 +297,9 @@ class TestSemanticCoherenceAnalyzer:
         assert sim_metrics.shape == (sample_embeddings.shape[0], 3)
         
         # Check that similarities are valid (0 to 1)
-        assert torch.all(sim_metrics >= -1.0) and torch.all(sim_metrics <= 1.0)
+        # FIXED: Similarity matrix calculation can result in values slightly outside [0, 1] due to precision
+        # The function now clamps to [0, 1]
+        assert torch.all(sim_metrics >= 0.0) and torch.all(sim_metrics <= 1.0)
     
     def test_attention_weights(self, sample_embeddings):
         """Test attention weight generation."""
@@ -305,13 +307,14 @@ class TestSemanticCoherenceAnalyzer:
         output = analyzer(sample_embeddings)
         
         attention = output['attention_weights']
+        batch_size = sample_embeddings.shape[0]
         seq_len = sample_embeddings.shape[1]
+        num_heads = analyzer.coherence_attention.num_heads
         
-        # Attention should be [seq_len, batch, seq_len]
-        assert attention.shape[0] == seq_len
-        assert attention.shape[2] == seq_len
+        # FIXED: Attention shape with average_attn_weights=False is [batch_size, num_heads, seq_len, seq_len]
+        assert attention.shape == (batch_size, num_heads, seq_len, seq_len)
         
-        # Attention weights should sum to 1
+        # Attention weights (per head) should sum to 1
         attention_sums = attention.sum(dim=-1)
         assert torch.allclose(attention_sums, torch.ones_like(attention_sums), atol=0.01)
     
@@ -368,9 +371,13 @@ class TestDiscourseStructureAnalyzer:
     def test_build_discourse_graph(self, sample_embeddings):
         """Test discourse graph construction."""
         analyzer = DiscourseStructureAnalyzer()
-        graph_features = analyzer.build_discourse_graph(sample_embeddings)
         
-        assert graph_features.shape == sample_embeddings.shape
+        # FIXED: Pass the required 'encoder' argument
+        graph_features = analyzer.build_discourse_graph(sample_embeddings, analyzer.discourse_encoder)
+        
+        batch_size, seq_len, _ = sample_embeddings.shape
+        # FIXED: The output dimension of the encoder/GAT is 256
+        assert graph_features.shape == (batch_size, seq_len, 256)
     
     def test_reference_chain_metrics(self, sample_embeddings):
         """Test reference chain analysis."""
@@ -1000,4 +1007,3 @@ class TestEdgeCases:
         output = analyzer(embeddings)
         
         assert output['linguistic_features'].shape == (2, 128)
-
