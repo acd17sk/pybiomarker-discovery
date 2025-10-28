@@ -11,16 +11,19 @@ from biomarkers.core.base import BiomarkerConfig
 @pytest.fixture
 def basic_config():
     """Create basic configuration for TextBiomarkerModel."""
+    # --- MODIFIED: Added required base config keys ---
     return {
+        'modality': 'text',                   # REQUIRED by BiomarkerConfig
+        'model_type': 'TextBiomarkerModel',   # REQUIRED by BiomarkerConfig
         'embedding_dim': 768,
         'hidden_dim': 256,
         'num_diseases': 8,
         'dropout': 0.3,
         'max_seq_length': 512,
         'use_pretrained': False,
-        'pretrained_model': 'bert-base-uncased'
+        'pretrained_model': 'bert-base-uncased',
+        'biomarker_feature_dim': 50
     }
-
 
 @pytest.fixture
 def sample_embeddings():
@@ -71,12 +74,14 @@ class TestTextBiomarkerModelInitialization:
         """Test that config parameters are properly set."""
         model = TextBiomarkerModel(basic_config)
         
-        assert model.embedding_dim == 768
-        assert model.hidden_dim == 256
-        assert model.num_diseases == 8
-        assert model.dropout == 0.3
-        assert model.max_seq_length == 512
-    
+        # --- MODIFIED: Access params from model.config ---
+        assert model.config.metadata.get('embedding_dim') == 768
+        assert model.config.hidden_dim == 256
+        assert model.config.num_diseases == 8
+        assert model.config.dropout == 0.3
+        assert model.config.metadata.get('max_seq_length') == 512
+        assert model.config.modality == 'text'
+
     def test_component_initialization(self, basic_config):
         """Test that all components are initialized."""
         model = TextBiomarkerModel(basic_config)
@@ -109,16 +114,20 @@ class TestTextBiomarkerModelInitialization:
     def test_different_configurations(self):
         """Test initialization with different configurations."""
         configs = [
-            {'embedding_dim': 512, 'hidden_dim': 128, 'num_diseases': 4},
-            {'embedding_dim': 1024, 'hidden_dim': 512, 'num_diseases': 10},
-            {'embedding_dim': 768, 'hidden_dim': 256, 'num_diseases': 8, 'dropout': 0.5}
+            # --- MODIFIED: Added required base config keys ---
+            {'modality': 'text', 'model_type': 'test', 'embedding_dim': 512, 'hidden_dim': 128, 'num_diseases': 4},
+            {'modality': 'text', 'model_type': 'test', 'embedding_dim': 1024, 'hidden_dim': 512, 'num_diseases': 10},
+            {'modality': 'text', 'model_type': 'test', 'embedding_dim': 768, 'hidden_dim': 256, 'num_diseases': 8, 'dropout': 0.5}
+            # -----------------------------------------------
         ]
         
         for config in configs:
             model = TextBiomarkerModel(config)
-            assert model.embedding_dim == config['embedding_dim']
-            assert model.hidden_dim == config['hidden_dim']
-            assert model.num_diseases == config['num_diseases']
+            # --- MODIFIED: Access params from model.config ---
+            assert model.config.metadata.get('embedding_dim') == config['embedding_dim']
+            assert model.config.hidden_dim == config['hidden_dim']
+            assert model.config.num_diseases == config['num_diseases']
+            # -----------------------------------------------
 
 
 class TestFeatureExtraction:
@@ -131,7 +140,9 @@ class TestFeatureExtraction:
         
         assert isinstance(features, torch.Tensor)
         # Should be mean-pooled raw embeddings
-        assert features.shape == (sample_embeddings.shape[0], model.embedding_dim)
+        # --- MODIFIED: Access params from model.config ---
+        assert features.shape == (sample_embeddings.shape[0], model.config.metadata.get('embedding_dim'))
+        # -----------------------------------------------
     
     def test_extract_biomarkers(self, basic_config, sample_embeddings):
         """Test biomarker extraction."""
@@ -204,7 +215,9 @@ class TestFeatureExtraction:
         aggregated = model.aggregate_biomarkers(biomarkers, batch_size)
         
         assert isinstance(aggregated, torch.Tensor)
-        assert aggregated.shape == (batch_size, 50)
+        # --- MODIFIED: Access params from model.config ---
+        assert aggregated.shape == (batch_size, model.config.metadata.get('biomarker_feature_dim'))
+        # -----------------------------------------------
         assert not torch.any(torch.isnan(aggregated))
     
     def test_aggregate_biomarkers_consistency(self, basic_config, sample_embeddings):
@@ -236,8 +249,10 @@ class TestForwardPass:
         assert 'linguistic_pattern' in output
         
         batch_size = sample_embeddings.shape[0]
-        assert output['logits'].shape == (batch_size, model.num_diseases)
-        assert output['probabilities'].shape == (batch_size, model.num_diseases)
+        # --- MODIFIED: Access params from model.config ---
+        assert output['logits'].shape == (batch_size, model.config.num_diseases)
+        assert output['probabilities'].shape == (batch_size, model.config.num_diseases)
+        # -----------------------------------------------
         assert output['predictions'].shape == (batch_size,)
     
     def test_forward_with_all_options(self, basic_config, sample_embeddings):
@@ -420,8 +435,10 @@ class TestUncertaintyQuantification:
         
         # Check shapes
         batch_size = sample_embeddings.shape[0]
-        assert uncertainty.shape == (batch_size, model.num_diseases)
-        assert confidence.shape == (batch_size, model.num_diseases)
+        # --- MODIFIED: Access params from model.config ---
+        assert uncertainty.shape == (batch_size, model.config.num_diseases)
+        assert confidence.shape == (batch_size, model.config.num_diseases)
+        # -----------------------------------------------
         
         # Uncertainty should be positive
         assert torch.all(uncertainty >= 0.0)
@@ -676,7 +693,10 @@ class TestNormativeComparison:
         """Test z-score calculation in comparison."""
         model = TextBiomarkerModel(basic_config)
         # Use single sample for predictable z-score
-        embeddings_single = torch.randn(1, 50, 768)
+        
+        # Use device from model for embedding
+        device = next(model.parameters()).device
+        embeddings_single = torch.randn(1, 50, 768).to(device)
         biomarkers = model.extract_biomarkers(embeddings_single)
         
         comparison = model.compare_to_normative_data(biomarkers, age=60, education=12)
@@ -686,12 +706,16 @@ class TestNormativeComparison:
             z_score = metric_comp['z_score']
             value = metric_comp['value']
             mean = metric_comp['normative_mean']
-            std = model.compare_to_normative_data.__defaults__[0][metric] # hacky way to get std
+            
+            # --- MODIFIED: Correctly access the class attribute ---
+            assert metric in model.NORMATIVE_STDS, f"Metric {metric} not in model's NORMATIVE_STDS"
+            std = model.NORMATIVE_STDS[metric] # No longer a hack
+            # ------------------------------------------------------
             
             # Re-calculate z-score to check logic
             expected_z = (value - mean) / (std + 1e-8)
             assert np.isclose(z_score, expected_z)
-    
+
     def test_comparison_interpretations(self, basic_config, sample_embeddings):
         """Test that comparison includes interpretations."""
         model = TextBiomarkerModel(basic_config)
@@ -839,7 +863,9 @@ class TestEdgeCases:
             embeddings = torch.randn(2, seq_len, 768)
             output = model(embeddings)
             
-            assert output['logits'].shape == (2, model.num_diseases)
+            # --- MODIFIED: Access params from model.config ---
+            assert output['logits'].shape == (2, model.config.num_diseases)
+            # -----------------------------------------------
     
     def test_zero_embeddings(self, basic_config):
         """Test with zero embeddings."""
@@ -880,26 +906,49 @@ class TestDeviceCompatibility:
     
     def test_cpu_computation(self, basic_config, sample_embeddings):
         """Test computation on CPU."""
-        model = TextBiomarkerModel(basic_config).cpu()
+        # Force config to use CPU
+        cpu_config = basic_config.copy()
+        cpu_config['device'] = 'cpu'
+        
+        model = TextBiomarkerModel(cpu_config) 
+        
         embeddings_cpu = sample_embeddings.cpu()
-        output = model(embeddings_cpu)
+        output = model(embeddings_cpu) # model.forward handles moving input
         
         assert output['logits'].device.type == 'cpu'
+        # Also check a sub-module parameter device
+        assert next(model.linguistic_analyzer.parameters()).device.type == 'cpu'
     
     @pytest.mark.gpu
-    def test_gpu_computation(self, basic_config, cuda_device):
+    # --- MODIFIED: Added sample_embeddings to the signature ---
+    def test_gpu_computation(self, basic_config, cuda_device, sample_embeddings):
+    # -----------------------------------------------------------
         """Test computation on GPU."""
-        model = TextBiomarkerModel(basic_config).to(cuda_device)
-        embeddings = torch.randn(2, 50, 768).to(cuda_device)
+        # Force config to use GPU
+        gpu_config = basic_config.copy()
+        gpu_config['device'] = str(cuda_device) # Use string representation
         
-        output = model(embeddings)
+        model = TextBiomarkerModel(gpu_config)
+
+        # sample_embeddings fixture already provides GPU tensor if cuda_device is active
+        # The 'embeddings' variable now correctly holds the tensor from the fixture
+        embeddings = sample_embeddings 
+        
+        output = model(embeddings) # model.forward handles moving input
         
         assert output['logits'].device.type == 'cuda'
-    
+         # Also check a sub-module parameter device
+        assert next(model.linguistic_analyzer.parameters()).device.type == 'cuda'
+
     @pytest.mark.gpu
     def test_device_transfer(self, basic_config, sample_embeddings, cuda_device):
         """Test transferring model between devices."""
-        model_cpu = TextBiomarkerModel(basic_config).cpu()
+        # CPU Model
+        cpu_config = basic_config.copy()
+        cpu_config['device'] = 'cpu'
+        # --- MODIFIED: Removed redundant .cpu() ---
+        model_cpu = TextBiomarkerModel(cpu_config)
+        # ------------------------------------------
         model_cpu.eval()
         embeddings_cpu = sample_embeddings.cpu()
 
@@ -907,22 +956,26 @@ class TestDeviceCompatibility:
         with torch.no_grad():
             output_cpu = model_cpu(embeddings_cpu)
         
-        # Move to GPU
-        model_gpu = TextBiomarkerModel(basic_config).to(cuda_device)
+        # GPU Model
+        gpu_config = basic_config.copy()
+        gpu_config['device'] = str(cuda_device)
+        # --- MODIFIED: Removed redundant .to(cuda_device) ---
+        model_gpu = TextBiomarkerModel(gpu_config)
+        # ----------------------------------------------------
         model_gpu.load_state_dict(model_cpu.state_dict()) # Ensure parameters are identical
         model_gpu.eval()
-        embeddings_gpu = sample_embeddings.to(cuda_device)
+        embeddings_gpu = sample_embeddings.to(cuda_device) # Test embeddings might be CPU initially
         
         with torch.no_grad():
             output_gpu = model_gpu(embeddings_gpu)
         
         # Results should be similar (allowing for numerical differences)
+        assert output_gpu['logits'].device.type == 'cuda'
         assert torch.allclose(
             output_cpu['logits'],
             output_gpu['logits'].cpu(),
             atol=1e-4
         )
-
 
 class TestModelSerialization:
     """Test suite for model saving and loading."""

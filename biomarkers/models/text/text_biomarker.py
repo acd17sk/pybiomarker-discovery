@@ -3,54 +3,67 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 import numpy as np  
+from biomarkers.core.base import BiomarkerModel, BiomarkerConfig
 
 
-class TextBiomarkerModel(nn.Module):
+class TextBiomarkerModel(BiomarkerModel):
     """
     Complete text biomarker extraction model.
     
-    This is a standalone version that doesn't inherit from BiomarkerModel
-    to avoid config compatibility issues.
+    This model integrates linguistic analysis with deep learning components
+    to predict disease states, cognitive scores, and clinical metrics.
     """
     
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__()
+    # Normative data (placeholders, can be loaded from config or subclassed)
+    NORMATIVE_MEANS = {
+        'lexical_diversity': 0.65,
+        'syntactic_complexity': 0.60,
+        'semantic_coherence': 0.75,
+        'idea_density': 0.55,
+        'information_content': 0.70
+    }
+    
+    NORMATIVE_STDS = {
+        'lexical_diversity': 0.12,
+        'syntactic_complexity': 0.15,
+        'semantic_coherence': 0.10,
+        'idea_density': 0.12,
+        'information_content': 0.13
+    }
+    
+    def __init__(self, config: Union[Dict[str, Any], BiomarkerConfig]):
+        """
+        Initializes the TextBiomarkerModel.
         
-        # Store configuration directly
-        self.config = config
-        
-        # Extract configuration
-        self.embedding_dim = config.get('embedding_dim', 768)
-        self.hidden_dim = config.get('hidden_dim', 256)
-        self.biomarker_feature_dim = config.get('biomarker_feature_dim', 50)
-        self.num_diseases = config.get('num_diseases', 8)
-        self.dropout = config.get('dropout', 0.3)
-        self.max_seq_length = config.get('max_seq_length', 512)
-        self.use_pretrained = config.get('use_pretrained', False)
-        self.pretrained_model = config.get('pretrained_model', 'bert-base-uncased')
-        
-        # Add modality for compatibility
-        self.modality = config.get('modality', 'text')
-        
-        # ❗NOTE: This '50' biomarker_feature_dim is a magic number defining the aggregated biomarker
-        # feature dimension. It must be consistent across:
-        # - _build_cognitive_predictors
-        # - _build_disease_classifier
-        # - aggregate_biomarkers
-        
-        
-        self._build_model()
+        Args:
+            config: A dictionary or BiomarkerConfig object. Must include:
+                - modality: 'text'
+                - model_type: 'TextBiomarkerModel'
+                - hidden_dim: (int)
+                - num_diseases: (int)
+                And in metadata (or as top-level keys in dict):
+                - embedding_dim: (int)
+                - biomarker_feature_dim: (int)
+        """
+        super().__init__(config)
     
     def _build_model(self):
         """Build complete text biomarker model"""
         
         # Import here to avoid circular dependency
         from biomarkers.models.text.linguistic_analyzer import LinguisticAnalyzer
+
+        # Get params from self.config
+        embedding_dim = self.config.metadata.get('embedding_dim', 768)
+        hidden_dim = self.config.hidden_dim
+        dropout = self.config.dropout
+        use_pretrained = self.config.metadata.get('use_pretrained', False)
+        num_diseases = self.config.num_diseases
         
         # Text encoder (can be replaced with transformer embeddings)
-        if self.use_pretrained:
+        if use_pretrained:
             # Placeholder for actual pretrained model loading
             self.text_encoder = self._build_simple_encoder()
         else:
@@ -58,9 +71,9 @@ class TextBiomarkerModel(nn.Module):
         
         # Linguistic analyzer
         self.linguistic_analyzer = LinguisticAnalyzer(
-            embedding_dim=self.embedding_dim,
-            hidden_dim=self.hidden_dim,
-            dropout=self.dropout
+            embedding_dim=embedding_dim,
+            hidden_dim=hidden_dim,
+            dropout=dropout
         )
         
         # Cognitive assessment predictors
@@ -74,9 +87,9 @@ class TextBiomarkerModel(nn.Module):
         
         # Longitudinal change detector
         self.change_detector = nn.Sequential(
-            nn.Linear(self.embedding_dim, 128), # Changed from self.hidden_dim
+            nn.Linear(embedding_dim, 128), 
             nn.ReLU(),
-            nn.Dropout(self.dropout),
+            nn.Dropout(dropout),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 5)
@@ -84,32 +97,35 @@ class TextBiomarkerModel(nn.Module):
         
         # Uncertainty quantification
         self.uncertainty_estimator = nn.Sequential(
-            nn.Linear(self.embedding_dim, 128), # Changed from self.hidden_dim
+            nn.Linear(embedding_dim, 128),
             nn.ReLU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(128, self.num_diseases)
+            nn.Dropout(dropout),
+            nn.Linear(128, num_diseases)
         )
     
     def _build_simple_encoder(self):
         """Build simple text encoder (fallback if not using pretrained)"""
-        # This is more of a projection layer, not an encoder.
-        # A simple mean pooling is often used if embeddings are pre-computed.
-        # If this model is meant to *process* embeddings, this is fine.
+        # --- CORRECTED: Access embedding_dim from config metadata ---
+        embedding_dim = self.config.metadata.get('embedding_dim', 768)
+        dropout = self.config.dropout
+        # ------------------------------------------------------------
+
         return nn.Sequential(
-            nn.Linear(self.embedding_dim, 512),
+            nn.Linear(embedding_dim, 512), 
             nn.ReLU(),
             nn.LayerNorm(512),
-            nn.Dropout(self.dropout),
-            nn.Linear(512, self.embedding_dim)
+            nn.Dropout(dropout),
+            nn.Linear(512, embedding_dim)
         )
     
     def _build_cognitive_predictors(self):
         """Build cognitive assessment predictors"""
+        hidden_dim = self.config.hidden_dim
+        biomarker_feature_dim = self.config.metadata.get('biomarker_feature_dim', 50)
+        
         self.cognitive_predictors = nn.ModuleDict()
         
-        # Input dim for predictors is classifier_input dim
-        classifier_feature_dim = self.hidden_dim // 2 + self.biomarker_feature_dim
-        predictor_input_dim = self.hidden_dim * 2 # Based on self.classifier_proj output
+        predictor_input_dim = hidden_dim * 2 # Based on self.classifier_proj output
         
         # MMSE predictor (0-30 scale)
         self.cognitive_predictors['MMSE'] = nn.Sequential(
@@ -138,28 +154,35 @@ class TextBiomarkerModel(nn.Module):
     
     def _build_disease_classifier(self):
         """Build disease classification head"""
-        # feature_dim from linguistic_features (hidden_dim // 2) + biomarker_features
-        feature_dim = self.hidden_dim // 2 + self.biomarker_feature_dim
+        hidden_dim = self.config.hidden_dim
+        biomarker_feature_dim = self.config.metadata.get('biomarker_feature_dim', 50)
+        dropout = self.config.dropout
+        num_diseases = self.config.num_diseases
         
-        self.classifier_proj = nn.Linear(feature_dim, self.hidden_dim * 2)
+        # feature_dim from linguistic_features (hidden_dim // 2) + biomarker_features
+        feature_dim = hidden_dim // 2 + biomarker_feature_dim
+        
+        self.classifier_proj = nn.Linear(feature_dim, hidden_dim * 2)
         
         self.classifier = nn.Sequential(
-            nn.Linear(self.hidden_dim * 2, 512),
+            nn.Linear(hidden_dim * 2, 512),
             nn.ReLU(),
-            nn.Dropout(self.dropout),
+            nn.Dropout(dropout),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(self.dropout),
+            nn.Dropout(dropout),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(128, self.num_diseases)
+            nn.Linear(128, num_diseases)
         )
     
     def _build_clinical_predictors(self):
         """Build clinical scale predictors"""
+        hidden_dim = self.config.hidden_dim
+        
         self.clinical_predictors = nn.ModuleDict()
         
-        predictor_input_dim = self.hidden_dim * 2 # Based on self.classifier_proj output
+        predictor_input_dim = hidden_dim * 2 # Based on self.classifier_proj output
         
         self.clinical_predictors['language_severity'] = nn.Sequential(
             nn.Linear(predictor_input_dim, 128),
@@ -179,32 +202,41 @@ class TextBiomarkerModel(nn.Module):
             nn.Linear(128, 1)
         )
     
-    @property
-    def num_parameters(self) -> int:
-        """Count total parameters"""
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
-    
-    def extract_features(self, embeddings: torch.Tensor) -> torch.Tensor:
-        """Extract text features from embeddings"""
-        # This is the "base_feature" used for change_detector and uncertainty
-        # It should probably just be mean-pooled raw embeddings.
-        features = torch.mean(embeddings, dim=1)
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Extract base text features from embeddings (as required by BiomarkerModel).
+        
+        Args:
+            x: Embeddings tensor [batch, seq_len, embedding_dim]
+            
+        Returns:
+            Mean-pooled features [batch, embedding_dim]
+        """
+        features = torch.mean(x.to(self.device), dim=1)
         return features
     
     def extract_biomarkers(self,
-                          embeddings: torch.Tensor,
+                          x: torch.Tensor,
                           text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
-        """Extract all text biomarkers"""
+        """
+        Extract all text biomarkers.
         
-        # FIXED: Get device and batch size from embeddings
-        device = embeddings.device
+        Args:
+            x: Embeddings tensor [batch, seq_len, embedding_dim]
+            text_metadata: Optional dictionary with parsed text features.
+        """
+        embeddings = x.to(self.device)
+        # --- CORRECTED: Use self.device consistently ---
+        device = self.device 
+        # -----------------------------------------------
         batch_size = embeddings.shape[0]
         
         biomarkers = {}
         
-        linguistic_output = self.linguistic_analyzer(embeddings, text_metadata)
+        # Ensure embeddings are on the correct device before passing to sub-module
+        linguistic_output = self.linguistic_analyzer(embeddings.to(device), text_metadata)
         
-        # FIXED: Create default tensors on the correct device and with correct batch size
+        # Create default tensors on the correct device
         default_scalar = torch.zeros(batch_size, device=device)
         default_vec_8 = torch.zeros(batch_size, 8, device=device)
         default_vec_7 = torch.zeros(batch_size, 7, device=device)
@@ -221,7 +253,6 @@ class TextBiomarkerModel(nn.Module):
         
         # Syntactic biomarkers
         syntactic = linguistic_output['syntactic_metrics']
-        # FIXED: Apply sigmoid to normalize raw linear outputs to [0, 1]
         syntactic_complexity = torch.sigmoid(syntactic.get('parse_metrics', default_vec_7.clone())[:, 6])
         dependency_distance = torch.sigmoid(syntactic.get('dependency_metrics', default_vec_6.clone())[:, 0])
         
@@ -284,6 +315,9 @@ class TextBiomarkerModel(nn.Module):
                              biomarkers: Dict[str, torch.Tensor],
                              batch_size: int) -> torch.Tensor:
         """Aggregate biomarkers into feature vector"""
+        
+        biomarker_feature_dim = self.config.metadata.get('biomarker_feature_dim', 50)
+
         key_biomarkers = [
             'lexical_diversity', 'vocabulary_richness', 'semantic_diversity',
             'syntactic_complexity', 'subordination_index', 'grammar_accuracy',
@@ -295,53 +329,68 @@ class TextBiomarkerModel(nn.Module):
         ]
         
         biomarker_list = []
+        # --- CORRECTED: Ensure all tensors added are on self.device ---
+        target_device = self.device
         for key in key_biomarkers:
             if key in biomarkers:
-                value = biomarkers[key]
-                # FIXED: Ensure all values have a batch dimension
-                if len(value.shape) == 1: # (batch_size,)
-                    biomarker_list.append(value.unsqueeze(-1)) # (batch_size, 1)
-                elif len(value.shape) > 1: # (batch_size, K)
-                    biomarker_list.append(value[:, :1]) # (batch_size, 1)
-                # else: scalar tensor, which shouldn't happen if extract_biomarkers is correct
-
+                value = biomarkers[key].to(target_device) # Move tensor to target device
+                if len(value.shape) == 1:
+                    biomarker_list.append(value.unsqueeze(-1))
+                elif len(value.shape) > 1:
+                    biomarker_list.append(value[:, :1])
+        # -------------------------------------------------------------
         
         if biomarker_list:
             aggregated = torch.cat(biomarker_list, dim=-1)
         else:
-            # FIXED: Use batch_size for default tensor
-            aggregated = torch.zeros(batch_size, 20).to(next(self.parameters()).device)
+            aggregated = torch.zeros(batch_size, 20).to(target_device)
         
         # Pad or truncate to self.biomarker_feature_dim
-        if aggregated.shape[-1] < self.biomarker_feature_dim:
-            padding = torch.zeros(aggregated.shape[0], self.biomarker_feature_dim - aggregated.shape[-1]).to(aggregated.device)
+        if aggregated.shape[-1] < biomarker_feature_dim:
+            # --- CORRECTED: Ensure padding is on the same device as aggregated ---
+            padding = torch.zeros(aggregated.shape[0], biomarker_feature_dim - aggregated.shape[-1], device=aggregated.device)
+            # -------------------------------------------------------------------
             aggregated = torch.cat([aggregated, padding], dim=-1)
-        elif aggregated.shape[-1] > self.biomarker_feature_dim:
-            aggregated = aggregated[:, :self.biomarker_feature_dim]
+        elif aggregated.shape[-1] > biomarker_feature_dim:
+            aggregated = aggregated[:, :biomarker_feature_dim]
         
         return aggregated
     
     def forward(self,
-                embeddings: torch.Tensor,
+                x: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None,
                 return_biomarkers: bool = True,
                 return_uncertainty: bool = True,
                 return_clinical: bool = True,
-                return_cognitive: bool = True) -> Dict[str, torch.Tensor]:
-        """Complete forward pass"""
+                return_cognitive: bool = True,
+                **kwargs) -> Dict[str, torch.Tensor]:
+        """
+        Complete forward pass (as required by BiomarkerModel).
         
-        # FIXED: Get batch_size
+        Args:
+            x: Embeddings tensor [batch, seq_len, embedding_dim]
+            text_metadata: Optional dictionary with parsed text features.
+            return_biomarkers: (bool)
+            return_uncertainty: (bool)
+            return_clinical: (bool)
+            return_cognitive: (bool)
+            **kwargs: Catches extra args from base class calls.
+            
+        Returns:
+            Dictionary of output tensors.
+        """
+        embeddings = x.to(self.device)
+        # -----------------------------------------------------------
         batch_size = embeddings.shape[0]
         
         biomarkers = self.extract_biomarkers(embeddings, text_metadata)
-        # This is mean-pooled raw embeddings
         base_features = self.extract_features(embeddings) 
         
+        # linguistic_analyzer now takes input on self.device from extract_biomarkers call
         linguistic_output = self.linguistic_analyzer(embeddings, text_metadata)
-        linguistic_features = linguistic_output['linguistic_features']
+        linguistic_features = linguistic_output['linguistic_features'] # Should be on self.device
         
-        # FIXED: Pass batch_size
-        biomarker_features = self.aggregate_biomarkers(biomarkers, batch_size)
+        biomarker_features = self.aggregate_biomarkers(biomarkers, batch_size) # Should be on self.device
         
         classification_features = torch.cat([
             linguistic_features,
@@ -355,7 +404,7 @@ class TextBiomarkerModel(nn.Module):
         output = {
             'logits': disease_logits,
             'probabilities': disease_probs,
-            'features': base_features, # This is the mean-pooled raw embedding
+            'features': base_features, 
             'predictions': disease_logits.argmax(dim=1),
             'linguistic_pattern': linguistic_output['pattern_probs']
         }
@@ -366,9 +415,8 @@ class TextBiomarkerModel(nn.Module):
         if return_cognitive and self.cognitive_predictors:
             cognitive_scores = {}
             for scale_name, predictor in self.cognitive_predictors.items():
-                scores = predictor(classifier_input) # Use projected features
+                scores = predictor(classifier_input)
                 if scale_name in ['MMSE', 'MoCA']:
-                    # Scale to [0, 30]
                     scores = torch.sigmoid(scores) * 30
                 elif scale_name == 'CDR':
                     scores = F.softmax(scores, dim=-1)
@@ -378,7 +426,7 @@ class TextBiomarkerModel(nn.Module):
         if return_clinical and self.clinical_predictors:
             clinical_scores = {}
             for scale_name, predictor in self.clinical_predictors.items():
-                scores = predictor(classifier_input) # Use projected features
+                scores = predictor(classifier_input)
                 if scale_name == 'language_severity':
                     scores = torch.sigmoid(scores) * 5
                 elif scale_name == 'communication_effectiveness':
@@ -388,11 +436,10 @@ class TextBiomarkerModel(nn.Module):
                 clinical_scores[scale_name] = scores.squeeze(-1) if scores.shape[-1] == 1 else scores
             output['clinical_scores'] = clinical_scores
         
-        # Use base_features (mean-pooled raw embeddings) for these
         change_logits = self.change_detector(base_features)
         output['change_prediction'] = F.softmax(change_logits, dim=-1)
         
-        if return_uncertainty:
+        if return_uncertainty and self.config.use_uncertainty:
             log_variance = self.uncertainty_estimator(base_features)
             uncertainty = torch.exp(log_variance)
             output['uncertainty'] = uncertainty
@@ -408,10 +455,11 @@ class TextBiomarkerModel(nn.Module):
         def get_value(tensor):
             if tensor.numel() == 0:
                 return 0.0
+            # Move tensor to CPU before calling .item()
             if tensor.numel() == 1:
-                return tensor.item()
+                return tensor.cpu().item() 
             else:
-                return tensor.mean().item()
+                return tensor.mean().cpu().item()
         
         lex_div = get_value(biomarkers.get('lexical_diversity', torch.tensor(1.0)))
         if lex_div < 0.4:
@@ -511,20 +559,19 @@ class TextBiomarkerModel(nn.Module):
         self.eval()
         with torch.no_grad():
             for sample in text_samples:
-                # Move sample to model's device
-                device = next(self.parameters()).device
-                sample = sample.to(device)
+                # Move sample to model's device - handled in forward now
                 output = self.forward(sample, return_biomarkers=True, return_cognitive=True)
                 trajectories.append({
-                    'biomarkers': output['biomarkers'],
-                    'cognitive_scores': output.get('cognitive_scores', {}),
-                    'disease_probs': output['probabilities']
+                    # Move biomarkers to CPU for consistent processing below
+                    'biomarkers': {k: v.cpu() for k, v in output['biomarkers'].items() if isinstance(v, torch.Tensor)},
+                    'cognitive_scores': {k: v.cpu() for k, v in output.get('cognitive_scores', {}).items() if isinstance(v, torch.Tensor)},
+                    'disease_probs': output['probabilities'].cpu()
                 })
         
         key_metrics = ['lexical_diversity', 'idea_density', 'semantic_coherence', 'syntactic_complexity']
         trends = {}
         
-        # Helper to get scalar value
+        # Helper to get scalar value (already on CPU from above)
         def get_value(tensor):
             if tensor.numel() == 0:
                 return 0.0
@@ -591,22 +638,9 @@ class TextBiomarkerModel(nn.Module):
                                  age: Optional[int] = None,
                                  education: Optional[int] = None) -> Dict[str, Any]:
         """Compare biomarkers to normative data (age and education adjusted)"""
-        # These are placeholders; in production, they'd be loaded from a config
-        normative_means = {
-            'lexical_diversity': 0.65,
-            'syntactic_complexity': 0.60,
-            'semantic_coherence': 0.75,
-            'idea_density': 0.55,
-            'information_content': 0.70
-        }
         
-        normative_stds = {
-            'lexical_diversity': 0.12,
-            'syntactic_complexity': 0.15,
-            'semantic_coherence': 0.10,
-            'idea_density': 0.12,
-            'information_content': 0.13
-        }
+        normative_means = self.NORMATIVE_MEANS
+        normative_stds = self.NORMATIVE_STDS
         
         age_adjustment = 0.0
         if age and age > 60:
@@ -622,21 +656,20 @@ class TextBiomarkerModel(nn.Module):
             if metric in biomarkers:
                 value_tensor = biomarkers[metric]
                 # Handle both scalar and batch tensors (by averaging batch)
+                # --- CORRECTED: Move to CPU before item() ---
                 if value_tensor.numel() == 0:
                     value = 0.0
                 elif value_tensor.numel() == 1:
-                    value = value_tensor.item()
+                    value = value_tensor.cpu().item()
                 else:
-                    value = value_tensor.mean().item()
+                    value = value_tensor.mean().cpu().item()
+                # ---------------------------------------------
                 
                 adjusted_mean = norm_mean + age_adjustment + edu_adjustment
                 std = normative_stds[metric]
                 
                 # Add epsilon to std to avoid division by zero
                 z_score = (value - adjusted_mean) / (std + 1e-8)
-                
-                # FIXED: Removed scipy dependency
-                # percentile = scipy_stats.norm.cdf(z_score) * 100
                 
                 if z_score < -2.0:
                     interpretation = 'severely impaired'
@@ -653,7 +686,6 @@ class TextBiomarkerModel(nn.Module):
                     'value': value,
                     'normative_mean': adjusted_mean,
                     'z_score': z_score,
-                    # 'percentile': percentile, # Removed
                     'interpretation': interpretation
                 }
         

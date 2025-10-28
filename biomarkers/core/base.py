@@ -8,7 +8,8 @@ import logging
 from pathlib import Path
 import json
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,16 +29,35 @@ class BiomarkerConfig:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary"""
-        return {
+        # --- MODIFIED ---
+        # Also include metadata keys at the top level for easier serialization
+        d = {
             k: v for k, v in self.__dict__.items()
-            if not k.startswith('_')
+            if not k.startswith('_') and k != 'metadata'
         }
+        d.update(self.metadata)
+        return d
+        # --------------
     
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> 'BiomarkerConfig':
         """Create config from dictionary"""
-        return cls(**config_dict)
-    
+        
+        # --- MODIFIED ---
+        """Create config from dictionary, handling extra keys."""
+        config_keys = {f.name for f in fields(cls)}
+        init_args = {k: v for k, v in config_dict.items() if k in config_keys}
+        metadata = init_args.get('metadata', {})
+        
+        # Put extra keys into metadata
+        for k, v in config_dict.items():
+            if k not in config_keys:
+                metadata[k] = v
+        
+        init_args['metadata'] = metadata
+        return cls(**init_args)
+        # --------------
+            
     def save(self, path: Union[str, Path]):
         """Save configuration to file"""
         path = Path(path)
@@ -65,6 +85,8 @@ class BiomarkerModel(nn.Module, ABC):
         self._model_built = False
         self._build_model()
         self._model_built = True
+
+        self.to(self.device)
         
     @abstractmethod
     def _build_model(self):
