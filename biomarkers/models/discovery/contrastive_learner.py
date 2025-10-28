@@ -536,7 +536,7 @@ class TripletBiomarker(nn.Module):
             if losses:
                 losses = torch.stack(losses)
             else:
-                losses = torch.tensor(0.0, device=z.device)
+                losses = torch.tensor(0.0, device=z.device, requires_grad=True)
         
         else:  # 'all' strategy
             # Use all valid triplets
@@ -561,7 +561,7 @@ class TripletBiomarker(nn.Module):
             if losses:
                 losses = torch.stack(losses)
             else:
-                losses = torch.tensor(0.0, device=z.device)
+                losses = torch.tensor(0.0, device=z.device, requires_grad=True)
         
         # Mean loss
         loss = losses.mean()

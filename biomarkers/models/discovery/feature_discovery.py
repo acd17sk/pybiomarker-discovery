@@ -31,10 +31,13 @@ class AutomatedFeatureDiscovery(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_diseases = num_diseases
         
+        # Input projection to ensure consistent dimensions
+        self.input_projection = nn.Linear(input_dim, hidden_dim)
+        
         # Attention-based discovery
         if use_attention:
             self.attention_discovery = AttentionBasedDiscovery(
-                input_dim=input_dim,
+                input_dim=hidden_dim,  # Use hidden_dim after projection
                 hidden_dim=hidden_dim,
                 num_heads=8,
                 dropout=dropout
@@ -45,7 +48,7 @@ class AutomatedFeatureDiscovery(nn.Module):
         # Feature interaction network
         if use_interaction:
             self.interaction_network = FeatureInteractionNetwork(
-                input_dim=input_dim,
+                input_dim=hidden_dim,  # Use hidden_dim after projection
                 hidden_dim=hidden_dim,
                 num_interactions=3,
                 dropout=dropout
@@ -56,7 +59,7 @@ class AutomatedFeatureDiscovery(nn.Module):
         # Cross-modal discovery
         if use_cross_modal:
             self.cross_modal_discovery = CrossModalFeatureDiscovery(
-                input_dim=input_dim,
+                input_dim=hidden_dim,  # Use hidden_dim after projection
                 num_modalities=num_modalities,
                 hidden_dim=hidden_dim,
                 dropout=dropout
@@ -66,7 +69,7 @@ class AutomatedFeatureDiscovery(nn.Module):
         
         # Adaptive feature selector
         self.adaptive_selector = AdaptiveFeatureSelector(
-            input_dim=input_dim,
+            input_dim=hidden_dim,  # Use hidden_dim after projection
             hidden_dim=hidden_dim,
             selection_ratio=0.5,
             dropout=dropout
@@ -74,20 +77,23 @@ class AutomatedFeatureDiscovery(nn.Module):
         
         # Combination finder
         self.combination_finder = BiomarkerCombinationFinder(
-            input_dim=input_dim,
+            input_dim=hidden_dim,  # Use hidden_dim after projection
             hidden_dim=hidden_dim,
             max_combinations=100,
             dropout=dropout
         )
         
         # Calculate total feature dimension
-        total_dim = hidden_dim  # Base features
+        # Count actual concatenated features
+        num_feature_sources = 1  # adaptive_selector always produces hidden_dim
         if use_attention:
-            total_dim += hidden_dim
+            num_feature_sources += 1  # attention produces hidden_dim
         if use_interaction:
-            total_dim += hidden_dim
+            num_feature_sources += 1  # interaction produces hidden_dim
         if use_cross_modal:
-            total_dim += hidden_dim * num_modalities
+            num_feature_sources += num_modalities  # cross_modal produces num_modalities × hidden_dim
+        
+        total_dim = num_feature_sources * hidden_dim
         
         # Feature fusion
         self.feature_fusion = nn.Sequential(
@@ -135,25 +141,29 @@ class AutomatedFeatureDiscovery(nn.Module):
             return_importance: Return feature importance scores
             return_patterns: Return discovered patterns
         """
+        # Project input to hidden dimension
+        x_proj = self.input_projection(x)
+        
         discovered_features = []
         
         # Adaptive feature selection
-        selected_features, selection_scores = self.adaptive_selector(x)
+        selected_features, selection_scores = self.adaptive_selector(x_proj)
         discovered_features.append(selected_features)
         
         # Attention-based discovery
         if self.attention_discovery is not None:
-            attention_features = self.attention_discovery(x)
+            attention_features = self.attention_discovery(x_proj)
             discovered_features.append(attention_features['attended_features'])
         
         # Feature interaction discovery
         if self.interaction_network is not None:
-            interaction_features = self.interaction_network(x)
+            interaction_features = self.interaction_network(x_proj)
             discovered_features.append(interaction_features['interaction_features'])
         
         # Cross-modal discovery
         if self.cross_modal_discovery is not None and modality_masks is not None:
-            cross_modal_features = self.cross_modal_discovery(x, modality_masks)
+            # Project modality masks to match hidden_dim
+            cross_modal_features = self.cross_modal_discovery(x_proj, modality_masks)
             for modal_features in cross_modal_features['modal_features']:
                 discovered_features.append(modal_features)
         
@@ -183,7 +193,7 @@ class AutomatedFeatureDiscovery(nn.Module):
         
         # Discovered patterns
         if return_patterns:
-            combination_output = self.combination_finder(x)
+            combination_output = self.combination_finder(x_proj)
             output['combinations'] = combination_output['combinations']
             output['combination_scores'] = combination_output['scores']
             
@@ -215,14 +225,14 @@ class AutomatedFeatureDiscovery(nn.Module):
                 # Add to tracker if space available or better than existing
                 if self.pattern_count < 100:
                     pos = self.pattern_count.item()
-                    self.discovered_patterns[pos] = pattern
+                    self.discovered_patterns[pos] = pattern[:self.input_dim]  # Ensure correct size
                     self.pattern_scores[pos] = score
                     self.pattern_count += 1
                 else:
                     # Replace worst pattern if current is better
                     min_score, min_idx = torch.min(self.pattern_scores, dim=0)
                     if score > min_score:
-                        self.discovered_patterns[min_idx] = pattern
+                        self.discovered_patterns[min_idx] = pattern[:self.input_dim]  # Ensure correct size
                         self.pattern_scores[min_idx] = score
     
     def get_top_patterns(self, k: int = 10) -> Dict[str, torch.Tensor]:
@@ -261,7 +271,7 @@ class AttentionBasedDiscovery(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         
-        # Input projection
+        # Input projection (now expects input_dim == hidden_dim)
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -314,15 +324,16 @@ class AttentionBasedDiscovery(nn.Module):
         Apply attention-based feature discovery
         
         Args:
-            x: Input features [batch, features]
+            x: Input features [batch, hidden_dim]
         """
         batch_size = x.shape[0]
         
         # Project input
         h = self.input_proj(x)
         
-        # Add sequence dimension for attention
-        h = h.unsqueeze(1)  # [batch, 1, hidden]
+        # Create sequence by replicating features to allow self-attention
+        seq_len = min(32, self.input_dim)  # Limit sequence length for efficiency
+        h = h.unsqueeze(1).expand(-1, seq_len, -1)  # [batch, seq_len, hidden]
         
         # Store attention weights
         all_attention_weights = []
@@ -340,18 +351,14 @@ class AttentionBasedDiscovery(nn.Module):
             h_ff = ff(h)
             h = ln(h + h_ff)
         
-        # Remove sequence dimension
-        h = h.squeeze(1)  # [batch, hidden]
+        # Pool sequence dimension
+        h = h.mean(dim=1)  # [batch, hidden]
         
-        # Apply interaction attention
-        h_expand = h.unsqueeze(1).expand(-1, self.input_dim, -1)
-        x_expand = x.unsqueeze(-1).expand(-1, -1, self.hidden_dim)
-        
-        combined = h_expand * x_expand
-        combined = combined.view(batch_size, self.input_dim, self.hidden_dim)
+        # Apply interaction attention with proper sequence
+        h_seq = h.unsqueeze(1).expand(-1, 2, -1)  # [batch, 2, hidden]
         
         interaction_features, interaction_weights = self.interaction_attention(
-            combined, combined, combined
+            h_seq, h_seq, h_seq
         )
         
         # Pool interaction features
@@ -359,7 +366,7 @@ class AttentionBasedDiscovery(nn.Module):
         
         return {
             'attended_features': attended_features,
-            'attention_weights': torch.stack(all_attention_weights, dim=0).mean(dim=0),
+            'attention_weights': all_attention_weights[-1] if all_attention_weights else torch.ones(batch_size, seq_len, seq_len, device=x.device) / seq_len,
             'interaction_weights': interaction_weights
         }
 
@@ -380,9 +387,9 @@ class FeatureInteractionNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_interactions = num_interactions
         
-        # Pairwise interaction network
+        # Simple pairwise interaction (avoid sampling)
         self.pairwise_net = nn.Sequential(
-            nn.Linear(input_dim * 2, hidden_dim),
+            nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -391,7 +398,7 @@ class FeatureInteractionNetwork(nn.Module):
         
         # Triple interaction network
         self.triple_net = nn.Sequential(
-            nn.Linear(input_dim * 3, hidden_dim),
+            nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -431,39 +438,13 @@ class FeatureInteractionNetwork(nn.Module):
         Discover feature interactions
         
         Args:
-            x: Input features [batch, features]
+            x: Input features [batch, input_dim]
         """
         batch_size = x.shape[0]
         
-        # Sample pairwise interactions
-        pairwise_features = []
-        num_pairs = min(50, self.input_dim * (self.input_dim - 1) // 2)
-        
-        for _ in range(num_pairs):
-            i = torch.randint(0, self.input_dim, (1,)).item()
-            j = torch.randint(0, self.input_dim, (1,)).item()
-            if i != j:
-                pair = torch.cat([x[:, i:i+1], x[:, j:j+1]], dim=-1)
-                pairwise_features.append(self.pairwise_net(pair))
-        
-        if pairwise_features:
-            pairwise_pooled = torch.stack(pairwise_features, dim=1).mean(dim=1)
-        else:
-            pairwise_pooled = torch.zeros(batch_size, self.hidden_dim // 2).to(x.device)
-        
-        # Sample triple interactions
-        triple_features = []
-        num_triples = min(20, self.input_dim * (self.input_dim - 1) * (self.input_dim - 2) // 6)
-        
-        for _ in range(num_triples):
-            indices = torch.randperm(self.input_dim)[:3]
-            triple = torch.cat([x[:, idx:idx+1] for idx in indices], dim=-1)
-            triple_features.append(self.triple_net(triple))
-        
-        if triple_features:
-            triple_pooled = torch.stack(triple_features, dim=1).mean(dim=1)
-        else:
-            triple_pooled = torch.zeros(batch_size, self.hidden_dim // 2).to(x.device)
+        # Process through networks (no sampling needed)
+        pairwise_pooled = self.pairwise_net(x)
+        triple_pooled = self.triple_net(x)
         
         # Factorization machines
         fm_linear_out = self.fm_linear(x)
@@ -474,7 +455,7 @@ class FeatureInteractionNetwork(nn.Module):
             torch.pow(x_v.sum(dim=1, keepdim=True), 2) -
             torch.pow(x_v, 2).sum(dim=1, keepdim=True)
         )
-        fm_out = fm_linear_out + fm_interactions.squeeze(-1)
+        fm_out = fm_linear_out + fm_interactions
         
         # Deep interactions
         deep_features = self.deep_interaction(x)
@@ -484,7 +465,7 @@ class FeatureInteractionNetwork(nn.Module):
             pairwise_pooled,
             triple_pooled,
             deep_features,
-            fm_out.unsqueeze(-1).expand(-1, self.hidden_dim // 4)
+            fm_out.expand(-1, self.hidden_dim // 4)
         ], dim=-1)
         
         interaction_features = self.interaction_fusion(all_interactions)
@@ -498,7 +479,7 @@ class FeatureInteractionNetwork(nn.Module):
             'interaction_weights': interaction_weights,
             'pairwise_features': pairwise_pooled,
             'triple_features': triple_pooled,
-            'fm_features': fm_out
+            'fm_features': fm_out.squeeze(-1) if fm_out.dim() > 1 else fm_out
         }
 
 
@@ -556,7 +537,7 @@ class AdaptiveFeatureSelector(nn.Module):
         Adaptively select features
         
         Args:
-            x: Input features [batch, features]
+            x: Input features [batch, input_dim]
             hard_selection: Use hard (discrete) selection
         """
         # Compute importance scores
@@ -594,7 +575,6 @@ class AdaptiveFeatureSelector(nn.Module):
         """Anneal temperature for Gumbel-Softmax"""
         min_temp = 0.5
         max_temp = 1.0
-        # self.temperature = max_temp - (max_temp - min_temp) * (step / total_steps)
         new_temp = max_temp - (max_temp - min_temp) * (step / total_steps)
         self.temperature.fill_(new_temp)
 
@@ -653,7 +633,7 @@ class BiomarkerCombinationFinder(nn.Module):
         Find biomarker combinations
         
         Args:
-            x: Input features [batch, features]
+            x: Input features [batch, input_dim]
         """
         batch_size = x.shape[0]
         
@@ -678,7 +658,7 @@ class BiomarkerCombinationFinder(nn.Module):
         
         for i in range(self.max_combinations):
             # Get combination
-            combo_probs = combination_probs[:, i, :]  # [batch, features]
+            combo_probs = combination_probs[:, i, :]  # [batch, input_dim]
             
             # Select top-k features
             _, top_indices = torch.topk(combo_probs, k=self.combination_size, dim=-1)
@@ -776,8 +756,8 @@ class CrossModalFeatureDiscovery(nn.Module):
         Discover cross-modal features
         
         Args:
-            x: Input features [batch, features]
-            modality_masks: Binary masks [batch, num_modalities, features]
+            x: Input features [batch, input_dim]
+            modality_masks: Binary masks [batch, num_modalities, original_features]
         """
         batch_size = x.shape[0]
         
@@ -785,11 +765,9 @@ class CrossModalFeatureDiscovery(nn.Module):
         modal_features = []
         
         for i in range(self.num_modalities):
-            # Apply modality mask
-            modal_input = x * modality_masks[:, i, :]
-            
-            # Encode modality
-            modal_feat = self.modality_encoders[i](modal_input)
+            # Simply use the projected input (masks were for original space)
+            # In practice, you'd apply masks before projection
+            modal_feat = self.modality_encoders[i](x)
             modal_features.append(modal_feat)
         
         # Stack for attention

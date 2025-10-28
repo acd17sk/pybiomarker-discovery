@@ -5,8 +5,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+# Primitive operations for search space
+PRIMITIVE_OPS = [
+    'none',
+    'skip_connect',
+    'conv_3x1',
+    'conv_5x1',
+    'conv_7x1',
+    'dilated_conv_3x1',
+    'dilated_conv_5x1',
+    'sep_conv_3x1',
+    'sep_conv_5x1',
+    'avg_pool_3x1',
+    'max_pool_3x1',
+    'mlp',
+    'attention',
+    'gated_linear',
+]
 
 
 class NeuralArchitectureSearch(nn.Module):
@@ -88,25 +108,6 @@ class NeuralArchitectureSearch(nn.Module):
         return self.controller.get_best_architecture()
 
 
-# Primitive operations for search space
-PRIMITIVE_OPS = [
-    'none',
-    'skip_connect',
-    'conv_3x1',
-    'conv_5x1',
-    'conv_7x1',
-    'dilated_conv_3x1',
-    'dilated_conv_5x1',
-    'sep_conv_3x1',
-    'sep_conv_5x1',
-    'avg_pool_3x1',
-    'max_pool_3x1',
-    'mlp',
-    'attention',
-    'gated_linear',
-]
-
-
 class DARTSSearchSpace(nn.Module):
     """
     Differentiable Architecture Search (DARTS) space for biomarkers
@@ -125,12 +126,15 @@ class DARTSSearchSpace(nn.Module):
         self.num_cells = num_cells
         self.num_nodes = num_nodes
         
-        # Input stem
+        # Input stem - use larger sequence length for conv operations
         self.stem = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU()
         )
+        
+        # Initial sequence length for conv operations
+        self.initial_seq_len = 32  # Fixed sequence length
         
         # Searchable cells
         self.cells = nn.ModuleList()
@@ -140,7 +144,8 @@ class DARTSSearchSpace(nn.Module):
                 hidden_dim=hidden_dim,
                 num_nodes=num_nodes,
                 reduction=reduction,
-                dropout=dropout
+                dropout=dropout,
+                seq_len=self.initial_seq_len  # Pass sequence length
             )
             self.cells.append(cell)
         
@@ -166,9 +171,9 @@ class DARTSSearchSpace(nn.Module):
         # Stem
         s0 = s1 = self.stem(x)
         
-        # Add dimension for conv operations
-        s0 = s0.unsqueeze(-1)
-        s1 = s1.unsqueeze(-1)
+        # Expand to sequence for conv operations
+        s0 = s0.unsqueeze(-1).expand(-1, -1, self.initial_seq_len)
+        s1 = s1.unsqueeze(-1).expand(-1, -1, self.initial_seq_len)
         
         # Forward through cells
         for i, cell in enumerate(self.cells):
@@ -229,20 +234,29 @@ class SearchCell(nn.Module):
                  hidden_dim: int,
                  num_nodes: int = 4,
                  reduction: bool = False,
-                 dropout: float = 0.3):
+                 dropout: float = 0.3,
+                 seq_len: int = 32):
         super().__init__()
         
         self.num_nodes = num_nodes
         self.reduction = reduction
         self.hidden_dim = hidden_dim
+        self.seq_len = seq_len
         
         # Build mixed operations for all edges
         self.ops = nn.ModuleList()
         for i in range(num_nodes):
             for j in range(2 + i):
                 stride = 2 if reduction and j < 2 else 1
-                op = MixedOp(hidden_dim, stride, dropout)
+                op = MixedOp(hidden_dim, stride, dropout, seq_len)
                 self.ops.append(op)
+        
+        # Channel reduction: after concatenating num_nodes outputs, reduce back to hidden_dim
+        self.channel_reducer = nn.Sequential(
+            nn.Conv1d(hidden_dim * num_nodes, hidden_dim, kernel_size=1),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU()
+        )
     
     def forward(self,
                 s0: torch.Tensor,
@@ -250,31 +264,44 @@ class SearchCell(nn.Module):
                 weights: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            s0: Previous-previous cell output
-            s1: Previous cell output
+            s0: Previous-previous cell output [batch, hidden_dim, seq_len]
+            s1: Previous cell output [batch, hidden_dim, seq_len]
             weights: Architecture weights for this cell
         """
         states = [s0, s1]
         offset = 0
         
         for i in range(self.num_nodes):
-            s = sum(self.ops[offset + j](h, weights[offset + j])
-                   for j, h in enumerate(states))
+            s_list = []
+            for j, h in enumerate(states):
+                op_output = self.ops[offset + j](h, weights[offset + j])
+                # Ensure all outputs have the same sequence length as s1
+                if op_output.shape[2] != s1.shape[2]:
+                    # Use adaptive pooling to match sequence length
+                    op_output = F.adaptive_avg_pool1d(op_output, s1.shape[2])
+                s_list.append(op_output)
+            s = sum(s_list)
             offset += len(states)
             states.append(s)
         
-        return torch.cat(states[-self.num_nodes:], dim=1)
+        # Concatenate last num_nodes states
+        concatenated = torch.cat(states[-self.num_nodes:], dim=1)  # [batch, hidden*num_nodes, seq]
+        
+        # Reduce channels back to hidden_dim
+        reduced = self.channel_reducer(concatenated)  # [batch, hidden, seq]
+        
+        return reduced
 
 
 class MixedOp(nn.Module):
     """Mixed operation combining all primitive ops"""
     
-    def __init__(self, hidden_dim: int, stride: int = 1, dropout: float = 0.3):
+    def __init__(self, hidden_dim: int, stride: int = 1, dropout: float = 0.3, seq_len: int = 32):
         super().__init__()
         self._ops = nn.ModuleList()
         
         for primitive in PRIMITIVE_OPS:
-            op = OPS[primitive](hidden_dim, stride, dropout)
+            op = OPS[primitive](hidden_dim, stride, dropout, seq_len)
             self._ops.append(op)
     
     def forward(self, x: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
@@ -282,7 +309,7 @@ class MixedOp(nn.Module):
         Weighted sum of operations
         
         Args:
-            x: Input tensor
+            x: Input tensor [batch, hidden_dim, seq_len]
             weights: Operation weights (softmax of architecture parameters)
         """
         return sum(w * op(x) for w, op in zip(weights, self._ops))
@@ -298,7 +325,7 @@ class Identity(nn.Module):
 
 
 class Zero(nn.Module):
-    def __init__(self, stride):
+    def __init__(self, stride, seq_len):
         super().__init__()
         self.stride = stride
     
@@ -309,7 +336,7 @@ class Zero(nn.Module):
 
 
 class ReLUConv1D(nn.Module):
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation=1):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation=1, seq_len=32):
         super().__init__()
         self.op = nn.Sequential(
             nn.ReLU(inplace=False),
@@ -324,7 +351,7 @@ class ReLUConv1D(nn.Module):
 
 class SepConv(nn.Module):
     """Separable convolution"""
-    def __init__(self, C_in, C_out, kernel_size, stride, padding):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, seq_len=32):
         super().__init__()
         self.op = nn.Sequential(
             nn.ReLU(inplace=False),
@@ -340,9 +367,11 @@ class SepConv(nn.Module):
 
 class MLPOp(nn.Module):
     """MLP operation"""
-    def __init__(self, hidden_dim, stride, dropout):
+    def __init__(self, hidden_dim, stride, dropout, seq_len=32):
         super().__init__()
         self.stride = stride
+        # Use adaptive pooling for stride
+        self.pool = nn.AdaptiveAvgPool1d(seq_len // stride) if stride > 1 else None
         self.op = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim * 2),
             nn.ReLU(),
@@ -352,17 +381,23 @@ class MLPOp(nn.Module):
         )
     
     def forward(self, x):
-        # Remove channel dim, apply MLP, restore
-        x_flat = x.squeeze(-1)
+        # x: [batch, hidden_dim, seq_len]
+        if self.pool is not None:
+            x = self.pool(x)
+        x_flat = x.transpose(1, 2)  # [batch, seq_len, hidden_dim]
+        batch, seq, dim = x_flat.shape
+        x_flat = x_flat.reshape(-1, dim)  # [batch*seq, hidden_dim]
         out = self.op(x_flat)
-        return out.unsqueeze(-1)
+        out = out.reshape(batch, seq, dim).transpose(1, 2)  # [batch, hidden_dim, seq_len]
+        return out
 
 
 class AttentionOp(nn.Module):
     """Self-attention operation"""
-    def __init__(self, hidden_dim, stride, dropout):
+    def __init__(self, hidden_dim, stride, dropout, seq_len=32):
         super().__init__()
         self.stride = stride
+        self.pool = nn.AdaptiveAvgPool1d(seq_len // stride) if stride > 1 else None
         self.attention = nn.MultiheadAttention(
             embed_dim=hidden_dim,
             num_heads=8,
@@ -372,47 +407,56 @@ class AttentionOp(nn.Module):
         self.norm = nn.LayerNorm(hidden_dim)
     
     def forward(self, x):
-        # Convert from [batch, channels, seq] to [batch, seq, channels]
-        x = x.transpose(1, 2)
+        # x: [batch, hidden_dim, seq_len]
+        if self.pool is not None:
+            x = self.pool(x)
+        x = x.transpose(1, 2)  # [batch, seq_len, hidden_dim]
         attn_out, _ = self.attention(x, x, x)
         out = self.norm(x + attn_out)
-        return out.transpose(1, 2)
+        return out.transpose(1, 2)  # [batch, hidden_dim, seq_len]
 
 
 class GatedLinear(nn.Module):
     """Gated linear unit"""
-    def __init__(self, hidden_dim, stride, dropout):
+    def __init__(self, hidden_dim, stride, dropout, seq_len=32):
         super().__init__()
         self.stride = stride
+        self.pool = nn.AdaptiveAvgPool1d(seq_len // stride) if stride > 1 else None
         self.linear = nn.Linear(hidden_dim, hidden_dim * 2)
         self.dropout = nn.Dropout(dropout)
     
     def forward(self, x):
-        x_flat = x.squeeze(-1)
+        # x: [batch, hidden_dim, seq_len]
+        if self.pool is not None:
+            x = self.pool(x)
+        x_flat = x.transpose(1, 2)  # [batch, seq_len, hidden_dim]
+        batch, seq, dim = x_flat.shape
+        x_flat = x_flat.reshape(-1, dim)
         out = self.linear(x_flat)
         value, gate = out.chunk(2, dim=-1)
         out = value * torch.sigmoid(gate)
         out = self.dropout(out)
-        return out.unsqueeze(-1)
+        out = out.reshape(batch, seq, dim).transpose(1, 2)
+        return out
 
 
 # Operation dictionary
 OPS = {
-    'none': lambda C, stride, dropout: Zero(stride),
-    'skip_connect': lambda C, stride, dropout: Identity() if stride == 1 else
+    'none': lambda C, stride, dropout, seq_len: Zero(stride, seq_len),
+    'skip_connect': lambda C, stride, dropout, seq_len: Identity() if stride == 1 else
                     nn.AvgPool1d(kernel_size=stride, stride=stride),
-    'conv_3x1': lambda C, stride, dropout: ReLUConv1D(C, C, 3, stride, 1),
-    'conv_5x1': lambda C, stride, dropout: ReLUConv1D(C, C, 5, stride, 2),
-    'conv_7x1': lambda C, stride, dropout: ReLUConv1D(C, C, 7, stride, 3),
-    'dilated_conv_3x1': lambda C, stride, dropout: ReLUConv1D(C, C, 3, stride, 2, dilation=2),
-    'dilated_conv_5x1': lambda C, stride, dropout: ReLUConv1D(C, C, 5, stride, 4, dilation=2),
-    'sep_conv_3x1': lambda C, stride, dropout: SepConv(C, C, 3, stride, 1),
-    'sep_conv_5x1': lambda C, stride, dropout: SepConv(C, C, 5, stride, 2),
-    'avg_pool_3x1': lambda C, stride, dropout: nn.AvgPool1d(3, stride=stride, padding=1),
-    'max_pool_3x1': lambda C, stride, dropout: nn.MaxPool1d(3, stride=stride, padding=1),
-    'mlp': lambda C, stride, dropout: MLPOp(C, stride, dropout),
-    'attention': lambda C, stride, dropout: AttentionOp(C, stride, dropout),
-    'gated_linear': lambda C, stride, dropout: GatedLinear(C, stride, dropout),
+    'conv_3x1': lambda C, stride, dropout, seq_len: ReLUConv1D(C, C, 3, stride, 1, seq_len=seq_len),
+    'conv_5x1': lambda C, stride, dropout, seq_len: ReLUConv1D(C, C, 5, stride, 2, seq_len=seq_len),
+    'conv_7x1': lambda C, stride, dropout, seq_len: ReLUConv1D(C, C, 7, stride, 3, seq_len=seq_len),
+    'dilated_conv_3x1': lambda C, stride, dropout, seq_len: ReLUConv1D(C, C, 3, stride, 2, dilation=2, seq_len=seq_len),
+    'dilated_conv_5x1': lambda C, stride, dropout, seq_len: ReLUConv1D(C, C, 5, stride, 4, dilation=2, seq_len=seq_len),
+    'sep_conv_3x1': lambda C, stride, dropout, seq_len: SepConv(C, C, 3, stride, 1, seq_len=seq_len),
+    'sep_conv_5x1': lambda C, stride, dropout, seq_len: SepConv(C, C, 5, stride, 2, seq_len=seq_len),
+    'avg_pool_3x1': lambda C, stride, dropout, seq_len: nn.AvgPool1d(3, stride=stride, padding=1),
+    'max_pool_3x1': lambda C, stride, dropout, seq_len: nn.MaxPool1d(3, stride=stride, padding=1),
+    'mlp': lambda C, stride, dropout, seq_len: MLPOp(C, stride, dropout, seq_len),
+    'attention': lambda C, stride, dropout, seq_len: AttentionOp(C, stride, dropout, seq_len),
+    'gated_linear': lambda C, stride, dropout, seq_len: GatedLinear(C, stride, dropout, seq_len),
 }
 
 
@@ -454,12 +498,14 @@ class ENASController(nn.Module):
             log_probs: Log probabilities of decisions
             entropies: Entropy of distributions
         """
+        device = self.g_emb.weight.device
+        
         # Initialize LSTM state
-        h = torch.zeros(batch_size, self.hidden_dim).to(self.g_emb.weight.device)
-        c = torch.zeros(batch_size, self.hidden_dim).to(self.g_emb.weight.device)
+        h = torch.zeros(batch_size, self.hidden_dim, device=device)
+        c = torch.zeros(batch_size, self.hidden_dim, device=device)
         
         # Start token
-        inputs = self.g_emb.weight.unsqueeze(0).expand(batch_size, -1)
+        inputs = self.g_emb.weight.expand(batch_size, -1)
         
         architectures = []
         log_probs = []
@@ -566,7 +612,7 @@ class BiomarkerNASController(nn.Module):
         else:
             # Use best architecture during evaluation
             if self.best_performance > 0:
-                arch_weights = self.best_arch
+                arch_weights = self.best_arch.clone()
             else:
                 arch_weights = F.softmax(self.arch_params, dim=-1)
         
@@ -575,9 +621,8 @@ class BiomarkerNASController(nn.Module):
     def update_best_architecture(self, performance: float):
         """Update best architecture based on performance"""
         if performance > self.best_performance:
-            # self.best_performance = 
             self.best_performance.fill_(performance)
-            self.best_arch = F.softmax(self.arch_params, dim=-1).detach()
+            self.best_arch.copy_(F.softmax(self.arch_params, dim=-1).detach())
     
     def get_best_architecture(self) -> Dict[str, Any]:
         """Get the best architecture found"""
@@ -684,13 +729,11 @@ class SuperNet(nn.Module):
         if op_name == 'skip_connect':
             return Identity()
         elif 'conv' in op_name:
-            # kernel_size = int(op_name.split('_')[1][0])
-            import re
-            match = re.search(r'_(\d+)x\d+', op_name) # Find the first digit after '_' and before 'x'
+            match = re.search(r'_(\d+)x\d+', op_name)
             if match:
                 kernel_size = int(match.group(1))
             else:
-                kernel_size = 3 # Default kernel size if pattern doesn't match
+                kernel_size = 3
             return nn.Sequential(
                 nn.Conv1d(hidden_dim, hidden_dim, kernel_size, padding=kernel_size // 2),
                 nn.BatchNorm1d(hidden_dim),
@@ -724,7 +767,14 @@ class SuperNet(nn.Module):
         
         for i, op_name in enumerate(arch_encoding):
             if i < len(self.layers) and op_name in self.layers[i]:
-                h = self.layers[i][op_name](h)
+                op = self.layers[i][op_name]
+                # Handle attention specially
+                if op_name == 'attention':
+                    h_seq = h.unsqueeze(1)
+                    h_attn, _ = op(h_seq, h_seq, h_seq)
+                    h = h_attn.squeeze(1)
+                else:
+                    h = op(h)
         
         return self.head(h)
 
@@ -754,7 +804,7 @@ class DifferentiableArchitecture(nn.Module):
         
         # Mixed operations for each block
         self.blocks = nn.ModuleList([
-            MixedOp(hidden_dim, stride=1, dropout=0.3)
+            MixedOp(hidden_dim, stride=1, dropout=0.3, seq_len=32)
             for _ in range(num_blocks)
         ])
         
@@ -764,7 +814,7 @@ class DifferentiableArchitecture(nn.Module):
     
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Forward with architecture search"""
-        h = self.input_proj(x).unsqueeze(-1)
+        h = self.input_proj(x).unsqueeze(-1).expand(-1, -1, 32)  # [batch, hidden, 32]
         
         arch_probs = []
         for i, (block, alpha) in enumerate(zip(self.blocks, self.arch_weights)):
@@ -772,7 +822,7 @@ class DifferentiableArchitecture(nn.Module):
             arch_probs.append(weights)
             h = block(h, weights)
         
-        h = h.squeeze(-1)
+        h = h.mean(dim=-1)  # Pool sequence dimension
         logits = self.output_proj(h)
         
         return {
