@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Any, Optional, List
-import numpy as np  # FIXED: Added missing import
+import numpy as np  
 
 
 class TextBiomarkerModel(nn.Module):
@@ -24,6 +24,7 @@ class TextBiomarkerModel(nn.Module):
         # Extract configuration
         self.embedding_dim = config.get('embedding_dim', 768)
         self.hidden_dim = config.get('hidden_dim', 256)
+        self.biomarker_feature_dim = config.get('biomarker_feature_dim', 50)
         self.num_diseases = config.get('num_diseases', 8)
         self.dropout = config.get('dropout', 0.3)
         self.max_seq_length = config.get('max_seq_length', 512)
@@ -32,6 +33,13 @@ class TextBiomarkerModel(nn.Module):
         
         # Add modality for compatibility
         self.modality = config.get('modality', 'text')
+        
+        # ❗NOTE: This '50' biomarker_feature_dim is a magic number defining the aggregated biomarker
+        # feature dimension. It must be consistent across:
+        # - _build_cognitive_predictors
+        # - _build_disease_classifier
+        # - aggregate_biomarkers
+        
         
         self._build_model()
     
@@ -100,7 +108,7 @@ class TextBiomarkerModel(nn.Module):
         self.cognitive_predictors = nn.ModuleDict()
         
         # Input dim for predictors is classifier_input dim
-        classifier_feature_dim = self.hidden_dim // 2 + 50
+        classifier_feature_dim = self.hidden_dim // 2 + self.biomarker_feature_dim
         predictor_input_dim = self.hidden_dim * 2 # Based on self.classifier_proj output
         
         # MMSE predictor (0-30 scale)
@@ -130,8 +138,8 @@ class TextBiomarkerModel(nn.Module):
     
     def _build_disease_classifier(self):
         """Build disease classification head"""
-        # feature_dim from linguistic_features (hidden_dim // 2) + biomarker_features (50)
-        feature_dim = self.hidden_dim // 2 + 50
+        # feature_dim from linguistic_features (hidden_dim // 2) + biomarker_features
+        feature_dim = self.hidden_dim // 2 + self.biomarker_feature_dim
         
         self.classifier_proj = nn.Linear(feature_dim, self.hidden_dim * 2)
         
@@ -304,12 +312,12 @@ class TextBiomarkerModel(nn.Module):
             # FIXED: Use batch_size for default tensor
             aggregated = torch.zeros(batch_size, 20).to(next(self.parameters()).device)
         
-        # Pad or truncate to 50 features
-        if aggregated.shape[-1] < 50:
-            padding = torch.zeros(aggregated.shape[0], 50 - aggregated.shape[-1]).to(aggregated.device)
+        # Pad or truncate to self.biomarker_feature_dim
+        if aggregated.shape[-1] < self.biomarker_feature_dim:
+            padding = torch.zeros(aggregated.shape[0], self.biomarker_feature_dim - aggregated.shape[-1]).to(aggregated.device)
             aggregated = torch.cat([aggregated, padding], dim=-1)
-        elif aggregated.shape[-1] > 50:
-            aggregated = aggregated[:, :50]
+        elif aggregated.shape[-1] > self.biomarker_feature_dim:
+            aggregated = aggregated[:, :self.biomarker_feature_dim]
         
         return aggregated
     

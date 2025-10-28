@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Comprehensive tests for linguistic_analyzer.py"""
 
 import pytest
@@ -304,6 +305,7 @@ class TestSemanticCoherenceAnalyzer:
     def test_attention_weights(self, sample_embeddings):
         """Test attention weight generation."""
         analyzer = SemanticCoherenceAnalyzer()
+        analyzer.eval() # ❗FIX: Set to eval mode to disable dropout on attn weights
         output = analyzer(sample_embeddings)
         
         attention = output['attention_weights']
@@ -316,7 +318,8 @@ class TestSemanticCoherenceAnalyzer:
         
         # Attention weights (per head) should sum to 1
         attention_sums = attention.sum(dim=-1)
-        assert torch.allclose(attention_sums, torch.ones_like(attention_sums), atol=0.01)
+        # ❗FIX: Use a tighter tolerance for float comparison
+        assert torch.allclose(attention_sums, torch.ones_like(attention_sums), atol=1e-5)
     
     def test_topic_metrics(self, sample_embeddings):
         """Test topic consistency metrics."""
