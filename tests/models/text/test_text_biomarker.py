@@ -130,6 +130,7 @@ class TestFeatureExtraction:
         features = model.extract_features(sample_embeddings)
         
         assert isinstance(features, torch.Tensor)
+        # Should be mean-pooled raw embeddings
         assert features.shape == (sample_embeddings.shape[0], model.embedding_dim)
     
     def test_extract_biomarkers(self, basic_config, sample_embeddings):
@@ -169,29 +170,41 @@ class TestFeatureExtraction:
         
         assert isinstance(biomarkers, dict)
         assert len(biomarkers) > 0
+        assert 'lexical_density' in biomarkers
+        assert biomarkers['lexical_density'].shape[0] == sample_embeddings.shape[0]
+
     
     def test_biomarker_values(self, basic_config, sample_embeddings):
         """Test that biomarker values are in valid ranges."""
         model = TextBiomarkerModel(basic_config)
         biomarkers = model.extract_biomarkers(sample_embeddings)
         
+        batch_size = sample_embeddings.shape[0]
+
         # Most biomarkers should be between 0 and 1
         for key, value in biomarkers.items():
-            if isinstance(value, torch.Tensor):
-                assert not torch.any(torch.isnan(value)), f"NaN found in {key}"
-                # Most metrics should be bounded
-                if value.dim() == 1 and value.shape[0] == sample_embeddings.shape[0]:
-                    assert torch.all(value >= 0.0) and torch.all(value <= 1.0), \
-                        f"Biomarker {key} out of range [0, 1]"
+            assert isinstance(value, torch.Tensor), f"{key} is not a tensor"
+            assert not torch.any(torch.isnan(value)), f"NaN found in {key}"
+            assert value.shape[0] == batch_size, f"{key} has wrong batch size"
+
+            # Most metrics should be bounded
+            if 'component' not in key and 'metric' not in key:
+                # Check range for primary biomarkers (often sigmoided)
+                assert torch.all(value >= 0.0), f"Biomarker {key} has values < 0"
+                if key not in ['yules_k', 'words_per_minute', 'pause_count', 'speed_variability']:
+                     assert torch.all(value <= 1.0), f"Biomarker {key} out of range [0, 1]"
     
     def test_aggregate_biomarkers(self, basic_config, sample_embeddings):
         """Test biomarker aggregation."""
         model = TextBiomarkerModel(basic_config)
         biomarkers = model.extract_biomarkers(sample_embeddings)
-        aggregated = model.aggregate_biomarkers(biomarkers)
+        
+        # FIXED: Pass batch_size
+        batch_size = sample_embeddings.shape[0]
+        aggregated = model.aggregate_biomarkers(biomarkers, batch_size)
         
         assert isinstance(aggregated, torch.Tensor)
-        assert aggregated.shape == (sample_embeddings.shape[0], 50)
+        assert aggregated.shape == (batch_size, 50)
         assert not torch.any(torch.isnan(aggregated))
     
     def test_aggregate_biomarkers_consistency(self, basic_config, sample_embeddings):
@@ -199,8 +212,10 @@ class TestFeatureExtraction:
         model = TextBiomarkerModel(basic_config)
         biomarkers = model.extract_biomarkers(sample_embeddings)
         
-        aggregated1 = model.aggregate_biomarkers(biomarkers)
-        aggregated2 = model.aggregate_biomarkers(biomarkers)
+        # FIXED: Pass batch_size
+        batch_size = sample_embeddings.shape[0]
+        aggregated1 = model.aggregate_biomarkers(biomarkers, batch_size)
+        aggregated2 = model.aggregate_biomarkers(biomarkers, batch_size)
         
         assert torch.allclose(aggregated1, aggregated2)
 
@@ -260,7 +275,7 @@ class TestForwardPass:
         
         # Check that probabilities sum to 1
         prob_sums = probabilities.sum(dim=1)
-        assert torch.allclose(prob_sums, torch.ones_like(prob_sums), atol=0.01)
+        assert torch.allclose(prob_sums, torch.ones_like(prob_sums), atol=1e-5)
         
         # Check that all probabilities are between 0 and 1
         assert torch.all(probabilities >= 0.0) and torch.all(probabilities <= 1.0)
@@ -299,6 +314,7 @@ class TestCognitiveScores:
         assert 'MMSE' in output['cognitive_scores']
         
         mmse_scores = output['cognitive_scores']['MMSE']
+        assert mmse_scores.shape == (sample_embeddings.shape[0],)
         
         # MMSE should be between 0 and 30
         assert torch.all(mmse_scores >= 0.0) and torch.all(mmse_scores <= 30.0)
@@ -311,7 +327,8 @@ class TestCognitiveScores:
         assert 'MoCA' in output['cognitive_scores']
         
         moca_scores = output['cognitive_scores']['MoCA']
-        
+        assert moca_scores.shape == (sample_embeddings.shape[0],)
+
         # MoCA should be between 0 and 30
         assert torch.all(moca_scores >= 0.0) and torch.all(moca_scores <= 30.0)
     
@@ -325,11 +342,11 @@ class TestCognitiveScores:
         cdr_scores = output['cognitive_scores']['CDR']
         
         # CDR should be probability distribution over 5 levels
-        assert cdr_scores.shape[1] == 5
+        assert cdr_scores.shape == (sample_embeddings.shape[0], 5)
         
         # Should sum to 1
         cdr_sums = cdr_scores.sum(dim=1)
-        assert torch.allclose(cdr_sums, torch.ones_like(cdr_sums), atol=0.01)
+        assert torch.allclose(cdr_sums, torch.ones_like(cdr_sums), atol=1e-5)
     
     def test_cognitive_scores_batch(self, basic_config):
         """Test cognitive scores with different batch sizes."""
@@ -355,7 +372,8 @@ class TestClinicalScores:
         assert 'language_severity' in output['clinical_scores']
         
         severity = output['clinical_scores']['language_severity']
-        
+        assert severity.shape == (sample_embeddings.shape[0],)
+
         # Should be between 0 and 5
         assert torch.all(severity >= 0.0) and torch.all(severity <= 5.0)
     
@@ -367,7 +385,8 @@ class TestClinicalScores:
         assert 'decline_rate' in output['clinical_scores']
         
         decline_rate = output['clinical_scores']['decline_rate']
-        
+        assert decline_rate.shape == (sample_embeddings.shape[0],)
+
         # Should be between 0 and 1
         assert torch.all(decline_rate >= 0.0) and torch.all(decline_rate <= 1.0)
     
@@ -379,7 +398,8 @@ class TestClinicalScores:
         assert 'communication_effectiveness' in output['clinical_scores']
         
         effectiveness = output['clinical_scores']['communication_effectiveness']
-        
+        assert effectiveness.shape == (sample_embeddings.shape[0],)
+
         # Should be between 0 and 10
         assert torch.all(effectiveness >= 0.0) and torch.all(effectiveness <= 10.0)
 
@@ -420,7 +440,7 @@ class TestUncertaintyQuantification:
         # High uncertainty should mean low confidence
         # confidence = 1 / (1 + uncertainty)
         expected_confidence = 1.0 / (1.0 + uncertainty)
-        assert torch.allclose(confidence, expected_confidence, atol=0.01)
+        assert torch.allclose(confidence, expected_confidence, atol=1e-5)
 
 
 class TestChangeDetection:
@@ -440,7 +460,7 @@ class TestChangeDetection:
         
         # Should sum to 1
         change_sums = change_pred.sum(dim=1)
-        assert torch.allclose(change_sums, torch.ones_like(change_sums), atol=0.01)
+        assert torch.allclose(change_sums, torch.ones_like(change_sums), atol=1e-5)
 
 
 class TestClinicalInterpretation:
@@ -494,11 +514,14 @@ class TestClinicalInterpretation:
         
         interpretation = model.get_clinical_interpretation(biomarkers)
         
-        if 'lexical_impairment' in interpretation:
-            assert 'severity' in interpretation['lexical_impairment']
+        assert 'lexical_impairment' in interpretation
+        assert 'severity' in interpretation['lexical_impairment']
+        assert interpretation['lexical_impairment']['severity'] == 'moderate'
         
-        if 'low_idea_density' in interpretation:
-            assert 'severity' in interpretation['low_idea_density']
+        assert 'low_idea_density' in interpretation
+        assert 'severity' in interpretation['low_idea_density']
+        assert interpretation['low_idea_density']['severity'] == 'high_risk'
+
     
     def test_interpretation_clinical_notes(self, basic_config):
         """Test that interpretation includes clinical notes."""
@@ -566,11 +589,11 @@ class TestTrajectoryPrediction:
         
         # Check that trends are computed for key metrics
         for metric in ['lexical_diversity', 'idea_density', 'semantic_coherence', 'syntactic_complexity']:
-            if metric in trends:
-                assert 'values' in trends[metric]
-                assert 'slope' in trends[metric]
-                assert 'trend' in trends[metric]
-                assert trends[metric]['trend'] in ['declining', 'stable', 'improving']
+            assert metric in trends
+            assert 'values' in trends[metric]
+            assert 'slope' in trends[metric]
+            assert 'trend' in trends[metric]
+            assert trends[metric]['trend'] in ['declining', 'stable', 'improving']
     
     def test_trajectory_classification(self, basic_config):
         """Test trajectory classification."""
@@ -627,9 +650,9 @@ class TestNormativeComparison:
         # Should include comparison for available metrics
         for metric in ['lexical_diversity', 'syntactic_complexity', 'semantic_coherence', 
                       'idea_density', 'information_content']:
-            if metric in comparison:
-                assert 'normative_mean' in comparison[metric]
-                assert 'z_score' in comparison[metric]
+            assert metric in comparison
+            assert 'normative_mean' in comparison[metric]
+            assert 'z_score' in comparison[metric]
     
     def test_compare_with_education_adjustment(self, basic_config, sample_embeddings):
         """Test normative comparison with education adjustment."""
@@ -652,14 +675,22 @@ class TestNormativeComparison:
     def test_comparison_z_scores(self, basic_config, sample_embeddings):
         """Test z-score calculation in comparison."""
         model = TextBiomarkerModel(basic_config)
-        biomarkers = model.extract_biomarkers(sample_embeddings)
+        # Use single sample for predictable z-score
+        embeddings_single = torch.randn(1, 50, 768)
+        biomarkers = model.extract_biomarkers(embeddings_single)
         
-        comparison = model.compare_to_normative_data(biomarkers)
+        comparison = model.compare_to_normative_data(biomarkers, age=60, education=12)
         
         # Check z-scores are reasonable
-        for metric_comp in comparison.values():
+        for metric, metric_comp in comparison.items():
             z_score = metric_comp['z_score']
-            assert -5.0 <= z_score <= 5.0  # Reasonable range
+            value = metric_comp['value']
+            mean = metric_comp['normative_mean']
+            std = model.compare_to_normative_data.__defaults__[0][metric] # hacky way to get std
+            
+            # Re-calculate z-score to check logic
+            expected_z = (value - mean) / (std + 1e-8)
+            assert np.isclose(z_score, expected_z)
     
     def test_comparison_interpretations(self, basic_config, sample_embeddings):
         """Test that comparison includes interpretations."""
@@ -671,7 +702,7 @@ class TestNormativeComparison:
         valid_interpretations = ['severely impaired', 'moderately impaired', 
                                 'mildly impaired', 'average', 'above average']
         
-        for metric_comp in comparison.values():
+        for metric, metric_comp in comparison.items():
             assert 'interpretation' in metric_comp
             assert metric_comp['interpretation'] in valid_interpretations
 
@@ -682,10 +713,13 @@ class TestGradientFlow:
     def test_gradient_flow_through_model(self, basic_config, sample_embeddings):
         """Test that gradients flow through the entire model."""
         model = TextBiomarkerModel(basic_config)
+        model.train() # Ensure model is in train mode for gradients
         embeddings = sample_embeddings.requires_grad_(True)
         
         output = model(embeddings)
         loss = output['logits'].sum()
+        
+        model.zero_grad()
         loss.backward()
         
         assert embeddings.grad is not None
@@ -694,6 +728,7 @@ class TestGradientFlow:
     def test_gradient_flow_with_all_outputs(self, basic_config, sample_embeddings):
         """Test gradient flow with all outputs enabled."""
         model = TextBiomarkerModel(basic_config)
+        model.train()
         embeddings = sample_embeddings.requires_grad_(True)
         
         output = model(
@@ -704,10 +739,19 @@ class TestGradientFlow:
             return_cognitive=True
         )
         
-        loss = output['logits'].sum()
+        # Combine all scalar/vector losses
+        loss = output['logits'].sum() + \
+               output['cognitive_scores']['MMSE'].sum() + \
+               output['cognitive_scores']['CDR'].sum() + \
+               output['clinical_scores']['language_severity'].sum() + \
+               output['uncertainty'].sum() + \
+               output['change_prediction'].sum()
+
+        model.zero_grad()
         loss.backward()
         
         assert embeddings.grad is not None
+        assert torch.any(embeddings.grad != 0)
 
 
 class TestModelTraining:
@@ -739,20 +783,27 @@ class TestModelTraining:
     def test_parameter_updates(self, basic_config, sample_embeddings):
         """Test that parameters are updated during training."""
         model = TextBiomarkerModel(basic_config)
+        model.train()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
         
         # Get initial parameters
-        initial_params = [p.clone() for p in model.parameters()]
+        initial_params = [p.clone().detach() for p in model.parameters()]
         
         # Training step
+        optimizer.zero_grad()
         output = model(sample_embeddings)
         loss = output['logits'].sum()
         loss.backward()
         optimizer.step()
         
         # Check that parameters changed
+        params_changed = False
         for initial, current in zip(initial_params, model.parameters()):
-            assert not torch.allclose(initial, current)
+            if not torch.allclose(initial, current):
+                params_changed = True
+                break
+        
+        assert params_changed, "Model parameters did not update after training step"
 
 
 class TestEdgeCases:
@@ -761,6 +812,7 @@ class TestEdgeCases:
     def test_single_sample(self, basic_config):
         """Test with single sample."""
         model = TextBiomarkerModel(basic_config)
+        model.eval()
         embeddings = torch.randn(1, 50, 768)
         
         output = model(embeddings)
@@ -771,6 +823,7 @@ class TestEdgeCases:
     def test_large_batch(self, basic_config):
         """Test with large batch size."""
         model = TextBiomarkerModel(basic_config)
+        model.eval()
         embeddings = torch.randn(32, 50, 768)
         
         output = model(embeddings)
@@ -780,6 +833,7 @@ class TestEdgeCases:
     def test_variable_sequence_lengths(self, basic_config):
         """Test with different sequence lengths."""
         model = TextBiomarkerModel(basic_config)
+        model.eval()
         
         for seq_len in [10, 50, 100, 200]:
             embeddings = torch.randn(2, seq_len, 768)
@@ -790,6 +844,7 @@ class TestEdgeCases:
     def test_zero_embeddings(self, basic_config):
         """Test with zero embeddings."""
         model = TextBiomarkerModel(basic_config)
+        model.eval()
         embeddings = torch.zeros(2, 50, 768)
         
         output = model(embeddings)
@@ -800,6 +855,7 @@ class TestEdgeCases:
     def test_no_nan_outputs(self, basic_config, sample_embeddings):
         """Test that outputs don't contain NaN values."""
         model = TextBiomarkerModel(basic_config)
+        model.eval()
         output = model(
             sample_embeddings,
             return_biomarkers=True,
@@ -824,33 +880,41 @@ class TestDeviceCompatibility:
     
     def test_cpu_computation(self, basic_config, sample_embeddings):
         """Test computation on CPU."""
-        model = TextBiomarkerModel(basic_config)
-        output = model(sample_embeddings)
+        model = TextBiomarkerModel(basic_config).cpu()
+        embeddings_cpu = sample_embeddings.cpu()
+        output = model(embeddings_cpu)
         
         assert output['logits'].device.type == 'cpu'
     
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_gpu_computation(self, basic_config):
+    @pytest.mark.gpu
+    def test_gpu_computation(self, basic_config, cuda_device):
         """Test computation on GPU."""
-        model = TextBiomarkerModel(basic_config).cuda()
-        embeddings = torch.randn(2, 50, 768).cuda()
+        model = TextBiomarkerModel(basic_config).to(cuda_device)
+        embeddings = torch.randn(2, 50, 768).to(cuda_device)
         
         output = model(embeddings)
         
         assert output['logits'].device.type == 'cuda'
     
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_device_transfer(self, basic_config, sample_embeddings):
+    @pytest.mark.gpu
+    def test_device_transfer(self, basic_config, sample_embeddings, cuda_device):
         """Test transferring model between devices."""
-        model = TextBiomarkerModel(basic_config)
-        
+        model_cpu = TextBiomarkerModel(basic_config).cpu()
+        model_cpu.eval()
+        embeddings_cpu = sample_embeddings.cpu()
+
         # CPU computation
-        output_cpu = model(sample_embeddings)
+        with torch.no_grad():
+            output_cpu = model_cpu(embeddings_cpu)
         
         # Move to GPU
-        model = model.cuda()
-        embeddings_gpu = sample_embeddings.cuda()
-        output_gpu = model(embeddings_gpu)
+        model_gpu = TextBiomarkerModel(basic_config).to(cuda_device)
+        model_gpu.load_state_dict(model_cpu.state_dict()) # Ensure parameters are identical
+        model_gpu.eval()
+        embeddings_gpu = sample_embeddings.to(cuda_device)
+        
+        with torch.no_grad():
+            output_gpu = model_gpu(embeddings_gpu)
         
         # Results should be similar (allowing for numerical differences)
         assert torch.allclose(
@@ -874,6 +938,7 @@ class TestModelSerialization:
     def test_save_and_load_state(self, basic_config, tmp_path):
         """Test saving and loading model state."""
         model = TextBiomarkerModel(basic_config)
+        model.eval()
         
         # Save state
         save_path = tmp_path / "model_state.pth"
@@ -882,8 +947,16 @@ class TestModelSerialization:
         # Load state
         new_model = TextBiomarkerModel(basic_config)
         new_model.load_state_dict(torch.load(save_path))
+        new_model.eval()
         
         # Compare parameters
         for p1, p2 in zip(model.parameters(), new_model.parameters()):
             assert torch.allclose(p1, p2)
 
+        # Test consistency
+        embeddings = torch.randn(2, 50, 768)
+        with torch.no_grad():
+            out1 = model(embeddings)
+            out2 = new_model(embeddings)
+        
+        assert torch.allclose(out1['logits'], out2['logits'])

@@ -31,7 +31,8 @@ class LinguisticAnalyzer(nn.Module):
         self.temporal_analyzer = TemporalAnalyzer(embedding_dim, hidden_dim // 2)
         
         # Feature fusion
-        fusion_dim = hidden_dim * 3 + hidden_dim // 2
+        # 7 analyzers, each outputting hidden_dim // 2
+        fusion_dim = 7 * (hidden_dim // 2)
         
         self.feature_fusion = nn.Sequential(
             nn.Linear(fusion_dim, hidden_dim * 2),
@@ -105,11 +106,11 @@ class LexicalDiversityAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Vocabulary encoder - FIXED: Use LayerNorm instead of BatchNorm1d
+        # Vocabulary encoder
         self.vocab_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.LayerNorm(512),  # Changed from BatchNorm1d
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -155,13 +156,18 @@ class LexicalDiversityAnalyzer(nn.Module):
         if text_metadata is None or 'tokens' not in text_metadata:
             return None
         
-        tokens = text_metadata['tokens']
-        batch_size = len(tokens) if isinstance(tokens, list) else 1
-        
+        tokens_list = text_metadata.get('tokens', [])
+        if not isinstance(tokens_list, list) or len(tokens_list) == 0:
+             return None
+
+        batch_size = len(tokens_list)
         features = []
         
         for batch_idx in range(batch_size):
-            batch_tokens = tokens[batch_idx] if isinstance(tokens, list) else tokens
+            batch_tokens = tokens_list[batch_idx]
+            if not batch_tokens: # Handle empty token list
+                features.append([0.0] * 5)
+                continue
             
             # Type-Token Ratio (TTR)
             types = len(set(batch_tokens))
@@ -176,7 +182,7 @@ class LexicalDiversityAnalyzer(nn.Module):
                     window = batch_tokens[i:i+window_size]
                     window_types = len(set(window))
                     mattr_values.append(window_types / window_size)
-                mattr = np.mean(mattr_values)
+                mattr = np.mean(mattr_values) if mattr_values else 0.0
             else:
                 mattr = ttr
             
@@ -190,14 +196,16 @@ class LexicalDiversityAnalyzer(nn.Module):
                 freq_spectrum = Counter(word_freq.values())
                 M1 = sum(i * freq_spectrum[i] for i in freq_spectrum)
                 M2 = sum(i**2 * freq_spectrum[i] for i in freq_spectrum)
-                yules_k = 10000 * (M2 - M1) / (M1 ** 2) if M1 > 0 else 0.0
+                yules_k = 10000 * (M2 - M1) / (M1 ** 2) if M1 > 0 and M1**2 > 0 else 0.0
             else:
                 yules_k = 0.0
             
             # Lexical density (content words / total words)
-            content_words = text_metadata.get('content_words', [[]])[batch_idx] if isinstance(
-                text_metadata.get('content_words', [[]]), list) else []
-            lexical_density = len(content_words) / token_count if token_count > 0 else 0.0
+            content_words_list = text_metadata.get('content_words')
+            lexical_density = 0.0
+            if content_words_list and len(content_words_list) > batch_idx:
+                content_words = content_words_list[batch_idx]
+                lexical_density = len(content_words) / token_count if token_count > 0 else 0.0
             
             features.append([ttr, mattr, hapax_ratio, yules_k, lexical_density])
         
@@ -242,6 +250,8 @@ class LexicalDiversityAnalyzer(nn.Module):
         }
         
         if statistical_features is not None:
+            # FIXED: Move computed features to the correct device
+            statistical_features = statistical_features.to(embeddings.device)
             output['statistical_ttr'] = statistical_features[:, 0]
             output['mattr'] = statistical_features[:, 1]
             output['hapax_ratio'] = statistical_features[:, 2]
@@ -257,11 +267,11 @@ class SyntacticComplexityAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Syntactic encoder - FIXED: Use LayerNorm instead of BatchNorm1d
+        # Syntactic encoder
         self.syntactic_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.LayerNorm(512),  # Changed from BatchNorm1d
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -315,16 +325,18 @@ class SyntacticComplexityAnalyzer(nn.Module):
         """Compute syntactic features from parse trees"""
         if text_metadata is None or 'parse_trees' not in text_metadata:
             return None
-        
-        parse_trees = text_metadata['parse_trees']
-        batch_size = len(parse_trees) if isinstance(parse_trees, list) else 1
-        
+
+        parse_trees = text_metadata.get('parse_trees', [])
+        if not isinstance(parse_trees, list) or len(parse_trees) == 0:
+            return None
+
+        batch_size = len(parse_trees)
         features = []
         
         for batch_idx in range(batch_size):
-            tree = parse_trees[batch_idx] if isinstance(parse_trees, list) else parse_trees
+            tree = parse_trees[batch_idx]
             
-            if tree:
+            if tree and isinstance(tree, str):
                 depth = self._compute_tree_depth(tree)
                 avg_depth = self._compute_avg_depth(tree)
                 num_clauses = self._count_clauses(tree)
@@ -337,22 +349,19 @@ class SyntacticComplexityAnalyzer(nn.Module):
         
         return torch.tensor(features, dtype=torch.float32)
     
-    def _compute_tree_depth(self, tree) -> int:
+    def _compute_tree_depth(self, tree: str) -> int:
         """Compute maximum depth of parse tree"""
-        if isinstance(tree, str):
-            return tree.count('(')
-        return 0
+        return tree.count('(')
     
-    def _compute_avg_depth(self, tree) -> float:
-        """Compute average depth across all nodes"""
-        return self._compute_tree_depth(tree) / 2.0
+    def _compute_avg_depth(self, tree: str) -> float:
+        """Compute average depth across all nodes (approximate)"""
+        nodes = tree.count('(') + tree.count(')')
+        return (self._compute_tree_depth(tree) / (nodes / 2.0)) if nodes > 0 else 0.0
     
-    def _count_clauses(self, tree) -> int:
+    def _count_clauses(self, tree: str) -> int:
         """Count clauses in parse tree"""
-        if isinstance(tree, str):
-            clause_markers = ['(S ', '(SBAR ', '(SBARQ ']
-            return sum(tree.count(marker) for marker in clause_markers)
-        return 0
+        clause_markers = ['(S ', '(SBAR ', '(SBARQ ']
+        return sum(tree.count(marker) for marker in clause_markers)
     
     def forward(self,
                 embeddings: torch.Tensor,
@@ -387,6 +396,8 @@ class SyntacticComplexityAnalyzer(nn.Module):
         }
         
         if parse_features is not None:
+            # FIXED: Move computed features to the correct device
+            parse_features = parse_features.to(embeddings.device)
             output['tree_depth'] = parse_features[:, 0]
             output['avg_tree_depth'] = parse_features[:, 1]
             output['clause_count'] = parse_features[:, 2]
@@ -415,7 +426,7 @@ class SemanticCoherenceAnalyzer(nn.Module):
             embed_dim=512,
             num_heads=8,
             dropout=0.2,
-            batch_first=True  # FIXED: Added batch_first=True
+            batch_first=True
         )
         
         # Topic consistency analyzer
@@ -452,6 +463,7 @@ class SemanticCoherenceAnalyzer(nn.Module):
         similarity_matrix = torch.clamp(similarity_matrix, 0.0, 1.0)
         
         batch_size = embeddings.shape[0]
+        device = embeddings.device
         metrics = []
         
         for b in range(batch_size):
@@ -460,22 +472,24 @@ class SemanticCoherenceAnalyzer(nn.Module):
             
             if seq_len > 1:
                 adjacent_sim = torch.diagonal(sim, offset=1).mean()
+                # Create mask on the correct device
                 mask = torch.triu(torch.ones_like(sim), diagonal=1)
-                global_coherence = (sim * mask).sum() / mask.sum()
+                global_coherence = (sim * mask).sum() / (mask.sum() + 1e-8)
                 semantic_flow = 1.0 - torch.diagonal(sim, offset=1).std()
             else:
-                adjacent_sim = torch.tensor(1.0)
-                global_coherence = torch.tensor(1.0)
-                semantic_flow = torch.tensor(1.0)
+                # FIXED: Create tensors on the correct device
+                adjacent_sim = torch.tensor(1.0, device=device)
+                global_coherence = torch.tensor(1.0, device=device)
+                semantic_flow = torch.tensor(1.0, device=device)
             
             # Clamp all metrics to [0, 1]
             adjacent_sim = torch.clamp(adjacent_sim, 0.0, 1.0)
             global_coherence = torch.clamp(global_coherence, 0.0, 1.0)
             semantic_flow = torch.clamp(semantic_flow, 0.0, 1.0)
             
-            metrics.append([adjacent_sim, global_coherence, semantic_flow])
+            metrics.append(torch.stack([adjacent_sim, global_coherence, semantic_flow]))
         
-        return torch.stack([torch.tensor(m) for m in metrics]).to(embeddings.device)
+        return torch.stack(metrics)
     
     def forward(self,
                 embeddings: torch.Tensor,
@@ -484,13 +498,13 @@ class SemanticCoherenceAnalyzer(nn.Module):
         # LSTM encoding for temporal semantics
         semantic_features, _ = self.semantic_encoder(embeddings)
         
-        # Self-attention for coherence - batch_first=True ensures [batch, seq, seq]
+        # Self-attention for coherence
         attended, attention_weights = self.coherence_attention(
             semantic_features,
             semantic_features,
             semantic_features,
             need_weights=True,
-            average_attn_weights=False  # Get per-head weights if needed
+            average_attn_weights=False
         )
         
         # Pool features
@@ -534,11 +548,11 @@ class DiscourseStructureAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Discourse encoder using GNN for discourse relations - FIXED: Use LayerNorm
+        # Discourse encoder using GNN for discourse relations
         self.discourse_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.LayerNorm(512),  # Changed from BatchNorm1d
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -549,7 +563,7 @@ class DiscourseStructureAnalyzer(nn.Module):
             embed_dim=256,
             num_heads=4,
             dropout=0.2,
-            batch_first=True  # FIXED: Added batch_first=True
+            batch_first=True
         )
         
         # Reference chain analyzer
@@ -582,13 +596,27 @@ class DiscourseStructureAnalyzer(nn.Module):
         
         self.output_proj = nn.Linear(256, output_dim)
     
-    def build_discourse_graph(self, embeddings: torch.Tensor) -> torch.Tensor:
-        """Build discourse relation graph"""
-        # FIXED: Apply graph attention with batch_first=True
+    def build_discourse_graph(self, 
+                                raw_embeddings: torch.Tensor,
+                                encoder: nn.Module) -> torch.Tensor:
+        """
+        Build discourse relation graph by encoding and applying attention.
+        
+        Args:
+            raw_embeddings: (batch_size, seq_len, embedding_dim)
+            encoder: The discourse_encoder module
+        """
+        batch_size, seq_len, embed_dim = raw_embeddings.shape
+        
+        # Project each position in sequence to 256 dimensions
+        sequence_projected = encoder(raw_embeddings.view(-1, embed_dim))
+        sequence_projected = sequence_projected.view(batch_size, seq_len, 256)
+        
+        # Apply graph attention
         graph_features, _ = self.discourse_gat(
-            embeddings,
-            embeddings,
-            embeddings
+            sequence_projected,
+            sequence_projected,
+            sequence_projected
         )
         
         return graph_features
@@ -597,22 +625,9 @@ class DiscourseStructureAnalyzer(nn.Module):
                 embeddings: torch.Tensor,
                 text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Analyze discourse structure"""
-        # Get sequence features first
-        batch_size, seq_len, embed_dim = embeddings.shape
         
-        # Pool to get discourse features - this is [batch, embed_dim]
-        pooled = torch.mean(embeddings, dim=1)
-        
-        # Project to 256 dimensions
-        discourse_features = self.discourse_encoder(pooled)  # [batch, 256]
-        
-        # Build discourse graph - need to work on sequence level
-        # Project each position in sequence to 256 dimensions
-        sequence_projected = self.discourse_encoder(embeddings.view(-1, embed_dim))
-        sequence_projected = sequence_projected.view(batch_size, seq_len, 256)
-        
-        # Now apply graph attention on the projected sequence
-        graph_features = self.build_discourse_graph(sequence_projected)  # [batch, seq_len, 256]
+        # FIXED: Pass raw embeddings and encoder to graph builder
+        graph_features = self.build_discourse_graph(embeddings, self.discourse_encoder) # [batch, seq_len, 256]
         graph_pooled = torch.mean(graph_features, dim=1)  # [batch, 256]
         
         reference = self.reference_analyzer(graph_pooled)
@@ -649,11 +664,11 @@ class CognitiveLoadAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Cognitive load encoder - FIXED: Use LayerNorm
+        # Cognitive load encoder
         self.cognitive_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.LayerNorm(512),  # Changed from BatchNorm1d
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -701,22 +716,29 @@ class CognitiveLoadAnalyzer(nn.Module):
         if text_metadata is None or 'tokens' not in text_metadata:
             return None
         
-        tokens = text_metadata['tokens']
-        batch_size = len(tokens) if isinstance(tokens, list) else 1
-        
-        filled_pause_markers = ['um', 'uh', 'uhm', 'er', 'ah', 'like', 'you know', 'i mean', 'sort of', 'kind of']
+        tokens_list = text_metadata.get('tokens', [])
+        if not isinstance(tokens_list, list) or len(tokens_list) == 0:
+             return None
+
+        batch_size = len(tokens_list)
+        filled_pause_markers = {'um', 'uh', 'uhm', 'er', 'ah'}
         
         features = []
         
         for batch_idx in range(batch_size):
-            batch_tokens = tokens[batch_idx] if isinstance(tokens, list) else tokens
+            batch_tokens = tokens_list[batch_idx]
+            if not batch_tokens:
+                features.append([0.0] * 4)
+                continue
+
             text = ' '.join(batch_tokens).lower()
             
-            pause_count = sum(text.count(marker) for marker in filled_pause_markers)
+            pause_count = sum(1 for token in batch_tokens if token.lower() in filled_pause_markers)
             pause_ratio = pause_count / len(batch_tokens) if len(batch_tokens) > 0 else 0.0
             
             ellipsis_count = text.count('...')
-            hesitation_pattern = len(re.findall(r'\b(well|so|actually|basically)\b', text))
+            # More complex hesitations
+            hesitation_pattern = len(re.findall(r'\b(like|you know|i mean|sort of|kind of|well|so)\b', text))
             
             features.append([pause_count, pause_ratio, ellipsis_count, hesitation_pattern])
         
@@ -727,19 +749,27 @@ class CognitiveLoadAnalyzer(nn.Module):
         if text_metadata is None or 'tokens' not in text_metadata:
             return None
         
-        tokens = text_metadata['tokens']
-        batch_size = len(tokens) if isinstance(tokens, list) else 1
+        tokens_list = text_metadata.get('tokens', [])
+        if not isinstance(tokens_list, list) or len(tokens_list) == 0:
+             return None
         
+        batch_size = len(tokens_list)
         features = []
         
         for batch_idx in range(batch_size):
-            batch_tokens = tokens[batch_idx] if isinstance(tokens, list) else tokens
+            batch_tokens = [t.lower() for t in tokens_list[batch_idx]]
+            if not batch_tokens:
+                features.append([0.0] * 4)
+                continue
             
             immediate_reps = sum(1 for i in range(len(batch_tokens)-1) 
                                if batch_tokens[i] == batch_tokens[i+1])
             
             bigrams = [' '.join(batch_tokens[i:i+2]) for i in range(len(batch_tokens)-1)]
-            bigram_reps = len(bigrams) - len(set(bigrams))
+            bigram_reps = 0
+            if bigrams:
+                bigram_counts = Counter(bigrams)
+                bigram_reps = sum(count - 1 for count in bigram_counts.values())
             
             total_reps = immediate_reps + bigram_reps
             rep_ratio = total_reps / len(batch_tokens) if len(batch_tokens) > 0 else 0.0
@@ -789,10 +819,14 @@ class CognitiveLoadAnalyzer(nn.Module):
         }
         
         if pause_features is not None:
+            # FIXED: Move computed features to the correct device
+            pause_features = pause_features.to(embeddings.device)
             output['pause_count'] = pause_features[:, 0]
             output['pause_ratio'] = pause_features[:, 1]
         
         if rep_features is not None:
+            # FIXED: Move computed features to the correct device
+            rep_features = rep_features.to(embeddings.device)
             output['immediate_repetitions'] = rep_features[:, 0]
             output['phrase_repetitions'] = rep_features[:, 1]
             output['total_repetitions'] = rep_features[:, 2]
@@ -806,11 +840,11 @@ class LinguisticDeclineAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Decline marker encoder - FIXED: Use LayerNorm
+        # Decline marker encoder
         self.decline_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.LayerNorm(512),  # Changed from BatchNorm1d
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -865,17 +899,24 @@ class LinguisticDeclineAnalyzer(nn.Module):
         if text_metadata is None or 'pos_tags' not in text_metadata:
             return None
         
-        pos_tags = text_metadata['pos_tags']
-        batch_size = len(pos_tags) if isinstance(pos_tags, list) else 1
+        pos_tags_list = text_metadata.get('pos_tags', [])
+        if not isinstance(pos_tags_list, list) or len(pos_tags_list) == 0:
+            return None
+        
+        batch_size = len(pos_tags_list)
         
         content_tags = {'NN', 'NNS', 'NNP', 'NNPS', 'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ', 
                        'JJ', 'JJR', 'JJS', 'RB', 'RBR', 'RBS'}
-        function_tags = {'PRP', 'PRP', 'DT', 'IN', 'CC', 'WDT', 'WP', 'WP', 'WRB'}
-        
+        function_tags = {'PRP', 'PRP$', 'DT', 'IN', 'CC', 'WDT', 'WP', 'WP$', 'WRB', 'TO', 'MD'}
+        pronoun_tags = {'PRP', 'PRP$', 'WP', 'WP$'}
+
         features = []
         
         for batch_idx in range(batch_size):
-            batch_tags = pos_tags[batch_idx] if isinstance(pos_tags, list) else pos_tags
+            batch_tags = pos_tags_list[batch_idx]
+            if not batch_tags:
+                features.append([0.0] * 3)
+                continue
             
             content_count = sum(1 for tag in batch_tags if tag in content_tags)
             function_count = sum(1 for tag in batch_tags if tag in function_tags)
@@ -884,7 +925,7 @@ class LinguisticDeclineAnalyzer(nn.Module):
             content_ratio = content_count / total_count if total_count > 0 else 0.0
             function_ratio = function_count / total_count if total_count > 0 else 0.0
             
-            pronoun_count = sum(1 for tag in batch_tags if tag in {'PRP', 'PRP'})
+            pronoun_count = sum(1 for tag in batch_tags if tag in pronoun_tags)
             pronoun_ratio = pronoun_count / total_count if total_count > 0 else 0.0
             
             features.append([content_ratio, function_ratio, pronoun_ratio])
@@ -937,6 +978,8 @@ class LinguisticDeclineAnalyzer(nn.Module):
         }
         
         if content_features is not None:
+            # FIXED: Move computed features to the correct device
+            content_features = content_features.to(embeddings.device)
             output['content_word_ratio'] = content_features[:, 0]
             output['function_word_ratio'] = content_features[:, 1]
             output['pronoun_ratio'] = content_features[:, 2]
@@ -950,11 +993,11 @@ class TemporalAnalyzer(nn.Module):
     def __init__(self, embedding_dim: int = 768, output_dim: int = 128):
         super().__init__()
         
-        # Temporal encoder - FIXED: Use LayerNorm
+        # Temporal encoder
         self.temporal_encoder = nn.Sequential(
             nn.Linear(embedding_dim, 512),
             nn.ReLU(),
-            nn.LayerNorm(512),  # Changed from BatchNorm1d
+            nn.LayerNorm(512),
             nn.Dropout(0.2),
             nn.Linear(512, 256),
             nn.ReLU()
@@ -995,27 +1038,34 @@ class TemporalAnalyzer(nn.Module):
         if text_metadata is None or 'timestamps' not in text_metadata:
             return None
         
-        timestamps = text_metadata['timestamps']
-        tokens = text_metadata.get('tokens', [])
+        timestamps_list = text_metadata.get('timestamps', [])
+        tokens_list = text_metadata.get('tokens', [])
         
-        batch_size = len(timestamps) if isinstance(timestamps, list) else 1
+        if not isinstance(timestamps_list, list) or len(timestamps_list) == 0 or \
+           not isinstance(tokens_list, list) or len(tokens_list) != len(timestamps_list):
+            return None
         
+        batch_size = len(timestamps_list)
         features = []
         
         for batch_idx in range(batch_size):
-            batch_timestamps = timestamps[batch_idx] if isinstance(timestamps, list) else timestamps
-            batch_tokens = tokens[batch_idx] if isinstance(tokens, list) else tokens
+            batch_timestamps = timestamps_list[batch_idx]
+            batch_tokens = tokens_list[batch_idx]
             
-            if len(batch_timestamps) < 2:
+            if not isinstance(batch_timestamps, np.ndarray) or len(batch_timestamps) < 2 or \
+               len(batch_timestamps) != len(batch_tokens):
                 features.append([0.0, 0.0, 0.0, 0.0])
                 continue
             
             intervals = np.diff(batch_timestamps)
-            
+            if len(intervals) == 0:
+                features.append([0.0, 0.0, 0.0, 0.0])
+                continue
+
             total_time = batch_timestamps[-1] - batch_timestamps[0]
             wpm = (len(batch_tokens) / total_time) * 60 if total_time > 0 else 0.0
             
-            pause_threshold = 2.0
+            pause_threshold = 2.0  # 2 seconds
             pauses = np.sum(intervals > pause_threshold)
             pause_ratio = pauses / len(intervals) if len(intervals) > 0 else 0.0
             
@@ -1059,6 +1109,8 @@ class TemporalAnalyzer(nn.Module):
         }
         
         if timing_features is not None:
+            # FIXED: Move computed features to the correct device
+            timing_features = timing_features.to(embeddings.device)
             output['words_per_minute'] = timing_features[:, 0]
             output['pause_ratio'] = timing_features[:, 1]
             output['pause_count'] = timing_features[:, 2]

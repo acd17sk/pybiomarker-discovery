@@ -63,6 +63,9 @@ def run_tests(args):
     # Add specific test file
     if args.file:
         test_file = test_dir / args.file
+        if not test_file.exists():
+            print(f"❌ Error: Test file not found: {test_file}")
+            return 1
         cmd.append(str(test_file))
     else:
         # Run all tests in this directory
@@ -111,6 +114,7 @@ def run_tests(args):
     
     # Run tests
     try:
+        # Use check=False to handle non-zero exit codes gracefully
         result = subprocess.run(cmd, check=False)
         return result.returncode
     except KeyboardInterrupt:
@@ -126,10 +130,13 @@ def list_tests(args):
     
     if args.file:
         test_file = test_dir / args.file
+        if not test_file.exists():
+            print(f"❌ Error: Test file not found: {test_file}")
+            return 1
         cmd = ["python", "-m", "pytest", str(test_file), "--collect-only", "-q"]
     
     print("=" * 70)
-    print("Available Tests")
+    print(f"Available Tests (in {test_dir.name if not args.file else args.file})")
     print("=" * 70)
     subprocess.run(cmd)
 
@@ -152,7 +159,21 @@ def run_quick_check():
         "test_text_biomarker.py::TestTextBiomarkerModelInitialization::test_basic_initialization",
     ]
     
-    cmd = ["python", "-m", "pytest", "-v", "--tb=short"] + [str(test_dir / t) for t in tests]
+    # Build full paths for pytest
+    test_paths = []
+    for t in tests:
+        file_name, test_path = t.split("::", 1)
+        full_file_path = test_dir / file_name
+        if not full_file_path.exists():
+            print(f"⚠️  Warning: Quick check test file not found: {file_name}")
+            continue
+        test_paths.append(f"{full_file_path}::{test_path}")
+
+    if not test_paths:
+        print("❌ Error: No quick check test paths found.")
+        return 1
+
+    cmd = ["python", "-m", "pytest", "-v", "--tb=short"] + test_paths
     
     result = subprocess.run(cmd, check=False)
     
@@ -192,13 +213,14 @@ def run_full_suite():
         "--tb=short"
     ]
     
+    print("Running:", " ".join(cmd))
     result = subprocess.run(cmd, check=False)
     
     print("\n" + "=" * 70)
     if result.returncode == 0:
         print("✅ Full test suite passed!")
         print("\n📊 Coverage report generated:")
-        print("  Open: htmlcov/index.html")
+        print(f"  Open: {Path.cwd() / 'htmlcov' / 'index.html'}")
     else:
         print("❌ Some tests failed. Please review errors above.")
     print("=" * 70)
@@ -218,34 +240,44 @@ def run_component_tests():
         "Cognitive Load": "test_linguistic_analyzer.py::TestCognitiveLoadAnalyzer",
         "Decline Markers": "test_linguistic_analyzer.py::TestLinguisticDeclineAnalyzer",
         "Temporal Analysis": "test_linguistic_analyzer.py::TestTemporalAnalyzer",
-        "Full Model": "test_text_biomarker.py::TestForwardPass",
+        "Full Model (Forward Pass)": "test_text_biomarker.py::TestForwardPass",
+        "Full Model (Initialization)": "test_text_biomarker.py::TestTextBiomarkerModelInitialization",
     }
     
     print("=" * 70)
     print("Component Test Menu")
     print("=" * 70)
     print("\nAvailable components:")
-    for i, (name, _) in enumerate(components.items(), 1):
+    component_keys = list(components.keys())
+    for i, name in enumerate(component_keys, 1):
         print(f"  {i}. {name}")
     print("  0. Run all components")
     print("\n" + "-" * 70)
     
     try:
-        choice = input("Select component to test (0-8): ").strip()
+        choice = input(f"Select component to test (0-{len(component_keys)}): ").strip()
         
         if choice == "0":
             # Run all
             cmd = ["python", "-m", "pytest", str(test_dir), "-v"]
+            print(f"\n🧪 Testing: All Components")
+            print("-" * 70)
+            print("Running:", " ".join(cmd))
             subprocess.run(cmd)
         elif choice.isdigit() and 1 <= int(choice) <= len(components):
             # Run selected component
-            component_name = list(components.keys())[int(choice) - 1]
+            component_name = component_keys[int(choice) - 1]
             component_path = components[component_name]
+            
+            # Construct full path
+            file_name, test_path = component_path.split("::", 1)
+            full_test_path = str(test_dir / file_name) + "::" + test_path
             
             print(f"\n🧪 Testing: {component_name}")
             print("-" * 70)
             
-            cmd = ["python", "-m", "pytest", str(test_dir / component_path), "-v"]
+            cmd = ["python", "-m", "pytest", full_test_path, "-v"]
+            print("Running:", " ".join(cmd))
             subprocess.run(cmd)
         else:
             print("Invalid choice")
@@ -258,7 +290,7 @@ def run_component_tests():
 
 
 def show_stats():
-    """Show test statistics."""
+    """Show test statistics by collecting tests."""
     test_dir = get_test_directory()
     
     print("=" * 70)
@@ -267,36 +299,41 @@ def show_stats():
     
     # Count tests
     cmd = ["python", "-m", "pytest", str(test_dir), "--collect-only", "-q"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print("❌ Failed to collect tests.")
+        print(e.stderr)
+        return 1
     
     lines = result.stdout.strip().split('\n')
     test_count = 0
+    test_files = set()
+    
+    # FIXED: More robust parsing
     for line in lines:
-        if 'test' in line.lower():
+        if '::' in line:  # A better indicator of a test function/method
             test_count += 1
+            try:
+                # Get the file path relative to the test_dir
+                full_path = Path(line.split('::')[0])
+                relative_path = full_path.relative_to(test_dir.parent)
+                test_files.add(str(relative_path))
+            except ValueError:
+                test_files.add(line.split('::')[0])
     
-    print(f"\n📊 Test Files:")
-    print(f"  - test_linguistic_analyzer.py")
-    print(f"  - test_text_biomarker.py")
+    print(f"\n📊 Test Files ({len(test_files)}):")
+    for f in sorted(list(test_files)):
+        print(f"  - {f}")
     
-    print(f"\n📈 Estimated Test Count: {test_count}+")
+    print(f"\n📈 Total Tests Collected: {test_count}")
     
+    # FIXED: Removed hardcoded, out-of-date statistics
     print(f"\n🧪 Test Categories:")
-    print(f"  - Lexical Analysis (15+ tests)")
-    print(f"  - Syntactic Analysis (12+ tests)")
-    print(f"  - Semantic Analysis (10+ tests)")
-    print(f"  - Discourse Analysis (10+ tests)")
-    print(f"  - Cognitive Load (15+ tests)")
-    print(f"  - Decline Markers (12+ tests)")
-    print(f"  - Temporal Analysis (10+ tests)")
-    print(f"  - Full Model (50+ tests)")
-    
-    print(f"\n🎯 Coverage:")
-    print(f"  - 8 Linguistic Analyzers")
-    print(f"  - Complete Text Biomarker Model")
-    print(f"  - 25+ Clinical Biomarkers")
+    print(f"  - Use 'python run_tests.py --components' for an interactive menu.")
     
     print("\n" + "=" * 70)
+    return 0
 
 
 def main():
@@ -323,7 +360,7 @@ Examples:
     
     # Special modes
     parser.add_argument(
-        '--quick', '-q',
+        '--quick',
         action='store_true',
         help='Run quick smoke tests (verify basic functionality)'
     )
@@ -354,7 +391,7 @@ Examples:
         help='Run specific test file (e.g., test_linguistic_analyzer.py)'
     )
     parser.add_argument(
-        '--test', '-t',
+        '--test', '-k', # Changed from -t to -k to match pytest
         help='Run tests matching pattern (e.g., test_initialization)'
     )
     
@@ -392,9 +429,9 @@ Examples:
         help='Verbose output (-vv)'
     )
     parser.add_argument(
-        '--quiet',
+        '--quiet', '-q', # Matched -q to --quick
         action='store_true',
-        help='Minimal output'
+        help='Minimal output (opposite of verbose)'
     )
     parser.add_argument(
         '--capture', '-s',
@@ -418,7 +455,7 @@ Examples:
     )
     parser.add_argument(
         '--parallel', '-n',
-        type=int,
+        type=str, # Allow 'auto'
         metavar='WORKERS',
         help='Run tests in parallel with N workers (e.g., -n 4 or -n auto)'
     )
@@ -438,7 +475,7 @@ Examples:
     # Pass-through args
     parser.add_argument(
         '--pytest-args',
-        help='Additional arguments to pass to pytest'
+        help='Additional arguments to pass to pytest (e.g., --pytest-args="--lf --sw")'
     )
     
     args = parser.parse_args()
@@ -448,8 +485,7 @@ Examples:
         return list_tests(args)
     
     if args.stats:
-        show_stats()
-        return 0
+        return show_stats()
     
     if args.components:
         return run_component_tests()

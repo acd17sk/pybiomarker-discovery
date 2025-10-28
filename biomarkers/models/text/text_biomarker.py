@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Any, Optional, List
+import numpy as np  # FIXED: Added missing import
 
 
 class TextBiomarkerModel(nn.Module):
@@ -42,6 +43,7 @@ class TextBiomarkerModel(nn.Module):
         
         # Text encoder (can be replaced with transformer embeddings)
         if self.use_pretrained:
+            # Placeholder for actual pretrained model loading
             self.text_encoder = self._build_simple_encoder()
         else:
             self.text_encoder = self._build_simple_encoder()
@@ -64,7 +66,7 @@ class TextBiomarkerModel(nn.Module):
         
         # Longitudinal change detector
         self.change_detector = nn.Sequential(
-            nn.Linear(self.hidden_dim, 128),
+            nn.Linear(self.embedding_dim, 128), # Changed from self.hidden_dim
             nn.ReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(128, 64),
@@ -74,7 +76,7 @@ class TextBiomarkerModel(nn.Module):
         
         # Uncertainty quantification
         self.uncertainty_estimator = nn.Sequential(
-            nn.Linear(self.hidden_dim, 128),
+            nn.Linear(self.embedding_dim, 128), # Changed from self.hidden_dim
             nn.ReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(128, self.num_diseases)
@@ -82,6 +84,9 @@ class TextBiomarkerModel(nn.Module):
     
     def _build_simple_encoder(self):
         """Build simple text encoder (fallback if not using pretrained)"""
+        # This is more of a projection layer, not an encoder.
+        # A simple mean pooling is often used if embeddings are pre-computed.
+        # If this model is meant to *process* embeddings, this is fine.
         return nn.Sequential(
             nn.Linear(self.embedding_dim, 512),
             nn.ReLU(),
@@ -94,9 +99,13 @@ class TextBiomarkerModel(nn.Module):
         """Build cognitive assessment predictors"""
         self.cognitive_predictors = nn.ModuleDict()
         
+        # Input dim for predictors is classifier_input dim
+        classifier_feature_dim = self.hidden_dim // 2 + 50
+        predictor_input_dim = self.hidden_dim * 2 # Based on self.classifier_proj output
+        
         # MMSE predictor (0-30 scale)
         self.cognitive_predictors['MMSE'] = nn.Sequential(
-            nn.Linear(self.hidden_dim, 128),
+            nn.Linear(predictor_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -105,7 +114,7 @@ class TextBiomarkerModel(nn.Module):
         
         # MoCA predictor (0-30 scale)
         self.cognitive_predictors['MoCA'] = nn.Sequential(
-            nn.Linear(self.hidden_dim, 128),
+            nn.Linear(predictor_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -114,7 +123,7 @@ class TextBiomarkerModel(nn.Module):
         
         # CDR predictor (Clinical Dementia Rating: 0, 0.5, 1, 2, 3)
         self.cognitive_predictors['CDR'] = nn.Sequential(
-            nn.Linear(self.hidden_dim, 128),
+            nn.Linear(predictor_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 5)
         )
@@ -142,20 +151,22 @@ class TextBiomarkerModel(nn.Module):
         """Build clinical scale predictors"""
         self.clinical_predictors = nn.ModuleDict()
         
+        predictor_input_dim = self.hidden_dim * 2 # Based on self.classifier_proj output
+        
         self.clinical_predictors['language_severity'] = nn.Sequential(
-            nn.Linear(self.hidden_dim * 2, 128),
+            nn.Linear(predictor_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 1)
         )
         
         self.clinical_predictors['decline_rate'] = nn.Sequential(
-            nn.Linear(self.hidden_dim * 2, 128),
+            nn.Linear(predictor_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 1)
         )
         
         self.clinical_predictors['communication_effectiveness'] = nn.Sequential(
-            nn.Linear(self.hidden_dim * 2, 128),
+            nn.Linear(predictor_input_dim, 128),
             nn.ReLU(),
             nn.Linear(128, 1)
         )
@@ -163,89 +174,107 @@ class TextBiomarkerModel(nn.Module):
     @property
     def num_parameters(self) -> int:
         """Count total parameters"""
-        return sum(p.numel() for p in self.parameters())
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
     def extract_features(self, embeddings: torch.Tensor) -> torch.Tensor:
         """Extract text features from embeddings"""
-        encoded = self.text_encoder(embeddings)
-        features = torch.mean(encoded, dim=1)
+        # This is the "base_feature" used for change_detector and uncertainty
+        # It should probably just be mean-pooled raw embeddings.
+        features = torch.mean(embeddings, dim=1)
         return features
     
     def extract_biomarkers(self,
                           embeddings: torch.Tensor,
                           text_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
         """Extract all text biomarkers"""
+        
+        # FIXED: Get device and batch size from embeddings
+        device = embeddings.device
+        batch_size = embeddings.shape[0]
+        
         biomarkers = {}
         
         linguistic_output = self.linguistic_analyzer(embeddings, text_metadata)
         
+        # FIXED: Create default tensors on the correct device and with correct batch size
+        default_scalar = torch.zeros(batch_size, device=device)
+        default_vec_8 = torch.zeros(batch_size, 8, device=device)
+        default_vec_7 = torch.zeros(batch_size, 7, device=device)
+        default_vec_6 = torch.zeros(batch_size, 6, device=device)
+
         # Lexical biomarkers
         lexical = linguistic_output['lexical_metrics']
         biomarkers.update({
-            'lexical_diversity': lexical.get('ttr', torch.tensor(0.0)),
-            'vocabulary_richness': lexical.get('richness_metrics', torch.zeros(1, 8))[:, :3].mean(dim=-1),
-            'semantic_diversity': lexical.get('semantic_diversity', torch.tensor(0.0)),
-            'lexical_density': lexical.get('lexical_density', torch.tensor(0.0))
+            'lexical_diversity': lexical.get('ttr', default_scalar.clone()),
+            'vocabulary_richness': lexical.get('richness_metrics', default_vec_8.clone())[:, :3].mean(dim=-1),
+            'semantic_diversity': lexical.get('semantic_diversity', default_scalar.clone()),
+            'lexical_density': lexical.get('lexical_density', default_scalar.clone())
         })
         
         # Syntactic biomarkers
         syntactic = linguistic_output['syntactic_metrics']
+        # FIXED: Apply sigmoid to normalize raw linear outputs to [0, 1]
+        syntactic_complexity = torch.sigmoid(syntactic.get('parse_metrics', default_vec_7.clone())[:, 6])
+        dependency_distance = torch.sigmoid(syntactic.get('dependency_metrics', default_vec_6.clone())[:, 0])
+        
         biomarkers.update({
-            'syntactic_complexity': syntactic.get('parse_metrics', torch.zeros(1, 7))[:, 6],
-            'subordination_index': syntactic.get('subordination_index', torch.tensor(0.0)),
-            'dependency_distance': syntactic.get('dependency_metrics', torch.zeros(1, 6))[:, 0],
-            'grammar_accuracy': syntactic.get('grammar_accuracy', torch.tensor(0.0))
+            'syntactic_complexity': syntactic_complexity,
+            'subordination_index': syntactic.get('subordination_index', default_scalar.clone()),
+            'dependency_distance': dependency_distance,
+            'grammar_accuracy': syntactic.get('grammar_accuracy', default_scalar.clone())
         })
         
         # Semantic biomarkers
         semantic = linguistic_output['semantic_metrics']
         biomarkers.update({
-            'semantic_coherence': semantic.get('topic_consistency', torch.tensor(0.0)),
-            'topic_consistency': semantic.get('topic_consistency', torch.tensor(0.0)),
-            'inter_sentence_similarity': semantic.get('inter_sentence_similarity', torch.tensor(0.0)),
-            'global_coherence': semantic.get('global_coherence', torch.tensor(0.0))
+            'semantic_coherence': semantic.get('topic_consistency', default_scalar.clone()),
+            'topic_consistency': semantic.get('topic_consistency', default_scalar.clone()),
+            'inter_sentence_similarity': semantic.get('inter_sentence_similarity', default_scalar.clone()),
+            'global_coherence': semantic.get('global_coherence', default_scalar.clone())
         })
         
         # Discourse biomarkers
         discourse = linguistic_output['discourse_metrics']
         biomarkers.update({
-            'reference_quality': discourse.get('reference_quality', torch.tensor(0.0)),
-            'cohesion_density': discourse.get('cohesion_density', torch.tensor(0.0)),
-            'narrative_completeness': discourse.get('narrative_completeness', torch.tensor(0.0)),
-            'information_flow': discourse.get('information_flow', torch.tensor(0.0))
+            'reference_quality': discourse.get('reference_quality', default_scalar.clone()),
+            'cohesion_density': discourse.get('cohesion_density', default_scalar.clone()),
+            'narrative_completeness': discourse.get('narrative_completeness', default_scalar.clone()),
+            'information_flow': discourse.get('information_flow', default_scalar.clone())
         })
         
         # Cognitive load biomarkers
         cognitive = linguistic_output['cognitive_load_metrics']
         biomarkers.update({
-            'cognitive_effort': cognitive.get('cognitive_effort', torch.tensor(0.0)),
-            'word_finding_difficulty': cognitive.get('word_finding_difficulty', torch.tensor(0.0)),
-            'repetition_score': cognitive.get('repetition_score', torch.tensor(0.0)),
-            'pause_ratio': cognitive.get('pause_ratio', torch.tensor(0.0))
+            'cognitive_effort': cognitive.get('cognitive_effort', default_scalar.clone()),
+            'word_finding_difficulty': cognitive.get('word_finding_difficulty', default_scalar.clone()),
+            'repetition_score': cognitive.get('repetition_score', default_scalar.clone()),
+            'pause_ratio': cognitive.get('pause_ratio', default_scalar.clone())
         })
         
         # Linguistic decline biomarkers
         decline = linguistic_output['decline_markers']
         biomarkers.update({
-            'grammar_simplification': decline.get('grammar_simplification', torch.tensor(0.0)),
-            'information_content': decline.get('information_content', torch.tensor(0.0)),
-            'idea_density': decline.get('idea_density', torch.tensor(0.0)),
-            'pronoun_overuse': decline.get('pronoun_overuse', torch.tensor(0.0)),
-            'semantic_impoverishment': decline.get('semantic_impoverishment', torch.tensor(0.0)),
-            'fragmentation': decline.get('fragmentation', torch.tensor(0.0))
+            'grammar_simplification': decline.get('grammar_simplification', default_scalar.clone()),
+            'information_content': decline.get('information_content', default_scalar.clone()),
+            'idea_density': decline.get('idea_density', default_scalar.clone()),
+            'pronoun_overuse': decline.get('pronoun_overuse', default_scalar.clone()),
+            'semantic_impoverishment': decline.get('semantic_impoverishment', default_scalar.clone()),
+            'fragmentation': decline.get('fragmentation', default_scalar.clone())
         })
         
         # Temporal biomarkers
         temporal = linguistic_output['temporal_metrics']
         biomarkers.update({
-            'writing_fluency': temporal.get('writing_fluency', torch.tensor(0.0)),
-            'revision_rate': temporal.get('revision_rate', torch.tensor(0.0)),
-            'pause_frequency': temporal.get('pause_frequency', torch.tensor(0.0))
+            'writing_fluency': temporal.get('writing_fluency', default_scalar.clone()),
+            'revision_rate': temporal.get('revision_rate', default_scalar.clone()),
+            'pause_frequency': temporal.get('pause_frequency', default_scalar.clone())
         })
         
         return biomarkers
     
-    def aggregate_biomarkers(self, biomarkers: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def aggregate_biomarkers(self, 
+                             biomarkers: Dict[str, torch.Tensor],
+                             batch_size: int) -> torch.Tensor:
         """Aggregate biomarkers into feature vector"""
         key_biomarkers = [
             'lexical_diversity', 'vocabulary_richness', 'semantic_diversity',
@@ -261,15 +290,21 @@ class TextBiomarkerModel(nn.Module):
         for key in key_biomarkers:
             if key in biomarkers:
                 value = biomarkers[key]
-                if len(value.shape) == 0:
-                    value = value.unsqueeze(0)
-                if len(value.shape) == 1:
-                    biomarker_list.append(value.unsqueeze(-1))
-                else:
-                    biomarker_list.append(value[:, :1])
+                # FIXED: Ensure all values have a batch dimension
+                if len(value.shape) == 1: # (batch_size,)
+                    biomarker_list.append(value.unsqueeze(-1)) # (batch_size, 1)
+                elif len(value.shape) > 1: # (batch_size, K)
+                    biomarker_list.append(value[:, :1]) # (batch_size, 1)
+                # else: scalar tensor, which shouldn't happen if extract_biomarkers is correct
+
         
-        aggregated = torch.cat(biomarker_list, dim=-1) if biomarker_list else torch.zeros(1, 20).to(next(self.parameters()).device)
+        if biomarker_list:
+            aggregated = torch.cat(biomarker_list, dim=-1)
+        else:
+            # FIXED: Use batch_size for default tensor
+            aggregated = torch.zeros(batch_size, 20).to(next(self.parameters()).device)
         
+        # Pad or truncate to 50 features
         if aggregated.shape[-1] < 50:
             padding = torch.zeros(aggregated.shape[0], 50 - aggregated.shape[-1]).to(aggregated.device)
             aggregated = torch.cat([aggregated, padding], dim=-1)
@@ -287,11 +322,18 @@ class TextBiomarkerModel(nn.Module):
                 return_cognitive: bool = True) -> Dict[str, torch.Tensor]:
         """Complete forward pass"""
         
+        # FIXED: Get batch_size
+        batch_size = embeddings.shape[0]
+        
         biomarkers = self.extract_biomarkers(embeddings, text_metadata)
-        base_features = self.extract_features(embeddings)
+        # This is mean-pooled raw embeddings
+        base_features = self.extract_features(embeddings) 
+        
         linguistic_output = self.linguistic_analyzer(embeddings, text_metadata)
         linguistic_features = linguistic_output['linguistic_features']
-        biomarker_features = self.aggregate_biomarkers(biomarkers)
+        
+        # FIXED: Pass batch_size
+        biomarker_features = self.aggregate_biomarkers(biomarkers, batch_size)
         
         classification_features = torch.cat([
             linguistic_features,
@@ -305,7 +347,7 @@ class TextBiomarkerModel(nn.Module):
         output = {
             'logits': disease_logits,
             'probabilities': disease_probs,
-            'features': base_features,
+            'features': base_features, # This is the mean-pooled raw embedding
             'predictions': disease_logits.argmax(dim=1),
             'linguistic_pattern': linguistic_output['pattern_probs']
         }
@@ -316,27 +358,29 @@ class TextBiomarkerModel(nn.Module):
         if return_cognitive and self.cognitive_predictors:
             cognitive_scores = {}
             for scale_name, predictor in self.cognitive_predictors.items():
-                scores = predictor(classifier_input)
+                scores = predictor(classifier_input) # Use projected features
                 if scale_name in ['MMSE', 'MoCA']:
+                    # Scale to [0, 30]
                     scores = torch.sigmoid(scores) * 30
                 elif scale_name == 'CDR':
                     scores = F.softmax(scores, dim=-1)
-                cognitive_scores[scale_name] = scores
+                cognitive_scores[scale_name] = scores.squeeze(-1) if scores.shape[-1] == 1 else scores
             output['cognitive_scores'] = cognitive_scores
         
         if return_clinical and self.clinical_predictors:
             clinical_scores = {}
             for scale_name, predictor in self.clinical_predictors.items():
-                scores = predictor(classifier_input)
+                scores = predictor(classifier_input) # Use projected features
                 if scale_name == 'language_severity':
                     scores = torch.sigmoid(scores) * 5
                 elif scale_name == 'communication_effectiveness':
                     scores = torch.sigmoid(scores) * 10
-                else:
+                else: # decline_rate
                     scores = torch.sigmoid(scores)
-                clinical_scores[scale_name] = scores
+                clinical_scores[scale_name] = scores.squeeze(-1) if scores.shape[-1] == 1 else scores
             output['clinical_scores'] = clinical_scores
         
+        # Use base_features (mean-pooled raw embeddings) for these
         change_logits = self.change_detector(base_features)
         output['change_prediction'] = F.softmax(change_logits, dim=-1)
         
@@ -352,75 +396,85 @@ class TextBiomarkerModel(nn.Module):
         """Generate clinical interpretation of text biomarkers"""
         interpretation = {}
         
-        # Helper function to get scalar value from tensor
+        # Helper function to get scalar value from tensor (handles batches by averaging)
         def get_value(tensor):
+            if tensor.numel() == 0:
+                return 0.0
             if tensor.numel() == 1:
                 return tensor.item()
             else:
                 return tensor.mean().item()
         
-        if 'lexical_diversity' in biomarkers and get_value(biomarkers['lexical_diversity']) < 0.4:
+        lex_div = get_value(biomarkers.get('lexical_diversity', torch.tensor(1.0)))
+        if lex_div < 0.4:
             interpretation['lexical_impairment'] = {
                 'detected': True,
-                'severity': 'moderate' if get_value(biomarkers['lexical_diversity']) < 0.3 else 'mild',
-                'ttr': f"{get_value(biomarkers['lexical_diversity']):.2f}",
+                'severity': 'moderate' if lex_div < 0.3 else 'mild',
+                'ttr': f"{lex_div:.2f}",
                 'clinical_note': 'Reduced lexical diversity suggests word-finding difficulties or restricted vocabulary.'
             }
         
-        if 'syntactic_complexity' in biomarkers and get_value(biomarkers['syntactic_complexity']) < 0.4:
+        syn_comp = get_value(biomarkers.get('syntactic_complexity', torch.tensor(1.0)))
+        if syn_comp < 0.4:
             interpretation['syntactic_simplification'] = {
                 'detected': True,
-                'complexity_score': f"{get_value(biomarkers['syntactic_complexity']):.2f}",
+                'complexity_score': f"{syn_comp:.2f}",
                 'clinical_note': 'Simplified syntactic structures may indicate cognitive decline or language impairment.'
             }
         
-        if 'semantic_coherence' in biomarkers and get_value(biomarkers['semantic_coherence']) < 0.5:
+        sem_coh = get_value(biomarkers.get('semantic_coherence', torch.tensor(1.0)))
+        if sem_coh < 0.5:
             interpretation['semantic_incoherence'] = {
                 'detected': True,
-                'coherence_score': f"{get_value(biomarkers['semantic_coherence']):.2f}",
+                'coherence_score': f"{sem_coh:.2f}",
                 'clinical_note': 'Reduced semantic coherence suggests difficulty maintaining topic or thought organization.'
             }
         
-        if 'idea_density' in biomarkers and get_value(biomarkers['idea_density']) < 0.4:
+        idea_dens = get_value(biomarkers.get('idea_density', torch.tensor(1.0)))
+        if idea_dens < 0.4:
             interpretation['low_idea_density'] = {
                 'detected': True,
-                'severity': 'high_risk' if get_value(biomarkers['idea_density']) < 0.3 else 'moderate_risk',
-                'idea_density': f"{get_value(biomarkers['idea_density']):.2f}",
+                'severity': 'high_risk' if idea_dens < 0.3 else 'moderate_risk',
+                'idea_density': f"{idea_dens:.2f}",
                 'clinical_note': 'Low idea density is a validated predictor of Alzheimer\'s disease risk.'
             }
         
-        if 'pronoun_overuse' in biomarkers and get_value(biomarkers['pronoun_overuse']) > 0.6:
+        pronoun_over = get_value(biomarkers.get('pronoun_overuse', torch.tensor(0.0)))
+        if pronoun_over > 0.6:
             interpretation['pronoun_overuse'] = {
                 'detected': True,
-                'pronoun_score': f"{get_value(biomarkers['pronoun_overuse']):.2f}",
+                'pronoun_score': f"{pronoun_over:.2f}",
                 'clinical_note': 'Excessive pronoun use may indicate word-retrieval difficulties or early cognitive decline.'
             }
         
-        if 'cognitive_effort' in biomarkers and get_value(biomarkers['cognitive_effort']) > 0.7:
+        cog_effort = get_value(biomarkers.get('cognitive_effort', torch.tensor(0.0)))
+        if cog_effort > 0.7:
             interpretation['high_cognitive_load'] = {
                 'detected': True,
-                'effort_score': f"{get_value(biomarkers['cognitive_effort']):.2f}",
+                'effort_score': f"{cog_effort:.2f}",
                 'clinical_note': 'High cognitive effort in language production suggests compensatory mechanisms or decline.'
             }
         
-        if 'fragmentation' in biomarkers and get_value(biomarkers['fragmentation']) > 0.6:
+        frag = get_value(biomarkers.get('fragmentation', torch.tensor(0.0)))
+        if frag > 0.6:
             interpretation['discourse_fragmentation'] = {
                 'detected': True,
-                'fragmentation_score': f"{get_value(biomarkers['fragmentation']):.2f}",
+                'fragmentation_score': f"{frag:.2f}",
                 'clinical_note': 'Fragmented discourse may indicate executive dysfunction or attention deficits.'
             }
         
-        if 'word_finding_difficulty' in biomarkers and get_value(biomarkers['word_finding_difficulty']) > 0.6:
+        wfd = get_value(biomarkers.get('word_finding_difficulty', torch.tensor(0.0)))
+        if wfd > 0.6:
             interpretation['word_finding_difficulty'] = {
                 'detected': True,
-                'severity': 'moderate' if get_value(biomarkers['word_finding_difficulty']) > 0.7 else 'mild',
+                'severity': 'moderate' if wfd > 0.7 else 'mild',
                 'clinical_note': 'Word-finding difficulties present, consider anomia assessment.'
             }
         
         decline_markers = [
             get_value(biomarkers.get('grammar_simplification', torch.tensor(0.0))),
             get_value(biomarkers.get('semantic_impoverishment', torch.tensor(0.0))),
-            get_value(biomarkers.get('information_content', torch.tensor(0.0))),
+            1.0 - get_value(biomarkers.get('information_content', torch.tensor(1.0))),
             1.0 - get_value(biomarkers.get('idea_density', torch.tensor(1.0)))
         ]
         
@@ -445,8 +499,13 @@ class TextBiomarkerModel(nn.Module):
         
         trajectories = []
         
+        # Ensure model is in eval mode for consistent predictions
+        self.eval()
         with torch.no_grad():
             for sample in text_samples:
+                # Move sample to model's device
+                device = next(self.parameters()).device
+                sample = sample.to(device)
                 output = self.forward(sample, return_biomarkers=True, return_cognitive=True)
                 trajectories.append({
                     'biomarkers': output['biomarkers'],
@@ -459,6 +518,8 @@ class TextBiomarkerModel(nn.Module):
         
         # Helper to get scalar value
         def get_value(tensor):
+            if tensor.numel() == 0:
+                return 0.0
             if tensor.numel() == 1:
                 return tensor.item()
             else:
@@ -468,15 +529,17 @@ class TextBiomarkerModel(nn.Module):
             values = [get_value(t['biomarkers'].get(metric, torch.tensor(0.0))) for t in trajectories]
             
             if len(values) >= 2:
-                time_diffs = [time_points[i+1] - time_points[i] for i in range(len(time_points)-1)]
-                value_diffs = [values[i+1] - values[i] for i in range(len(values)-1)]
-                slopes = [vd / td if td > 0 else 0 for vd, td in zip(value_diffs, time_diffs)]
-                avg_slope = sum(slopes) / len(slopes)
+                # Simple linear regression (slope)
+                x = np.array(time_points)
+                y = np.array(values)
+                # Add a small epsilon to denominator to avoid division by zero
+                x_mean, y_mean = np.mean(x), np.mean(y)
+                slope = np.sum((x - x_mean) * (y - y_mean)) / (np.sum((x - x_mean)**2) + 1e-8)
                 
                 trends[metric] = {
                     'values': values,
-                    'slope': avg_slope,
-                    'trend': 'declining' if avg_slope < -0.05 else 'stable' if avg_slope < 0.05 else 'improving'
+                    'slope': slope,
+                    'trend': 'declining' if slope < -0.01 else 'stable' if slope < 0.01 else 'improving'
                 }
         
         decline_count = sum(1 for t in trends.values() if t['trend'] == 'declining')
@@ -520,6 +583,7 @@ class TextBiomarkerModel(nn.Module):
                                  age: Optional[int] = None,
                                  education: Optional[int] = None) -> Dict[str, Any]:
         """Compare biomarkers to normative data (age and education adjusted)"""
+        # These are placeholders; in production, they'd be loaded from a config
         normative_means = {
             'lexical_diversity': 0.65,
             'syntactic_complexity': 0.60,
@@ -549,21 +613,22 @@ class TextBiomarkerModel(nn.Module):
         for metric, norm_mean in normative_means.items():
             if metric in biomarkers:
                 value_tensor = biomarkers[metric]
-                # Handle both scalar and batch tensors
-                if value_tensor.numel() == 1:
+                # Handle both scalar and batch tensors (by averaging batch)
+                if value_tensor.numel() == 0:
+                    value = 0.0
+                elif value_tensor.numel() == 1:
                     value = value_tensor.item()
                 else:
-                    # Take mean for batch
                     value = value_tensor.mean().item()
                 
                 adjusted_mean = norm_mean + age_adjustment + edu_adjustment
                 std = normative_stds[metric]
                 
-                z_score = (value - adjusted_mean) / std
+                # Add epsilon to std to avoid division by zero
+                z_score = (value - adjusted_mean) / (std + 1e-8)
                 
-                # Approximate percentile
-                from scipy import stats as scipy_stats
-                percentile = scipy_stats.norm.cdf(z_score) * 100
+                # FIXED: Removed scipy dependency
+                # percentile = scipy_stats.norm.cdf(z_score) * 100
                 
                 if z_score < -2.0:
                     interpretation = 'severely impaired'
@@ -580,7 +645,7 @@ class TextBiomarkerModel(nn.Module):
                     'value': value,
                     'normative_mean': adjusted_mean,
                     'z_score': z_score,
-                    'percentile': percentile,
+                    # 'percentile': percentile, # Removed
                     'interpretation': interpretation
                 }
         
